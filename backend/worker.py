@@ -290,6 +290,7 @@ class Supervisor:
         self.active = None
         self.entered = False
         self.last_heartbeat = 0.0
+        self.last_purge = 0.0
         self.model_ready = False
         self.config = {name: str(getattr(settings, name)) for name in (
             "ffmpeg_bin", "ffprobe_bin", "analyzer_factory", "rules_factory")}
@@ -403,6 +404,28 @@ class Supervisor:
         if kind in ("startup_failed", "crashed"):
             self._stop_model()
 
+    def purge_uploads(self) -> int:
+        """Delete uploaded videos of finished jobs. Only files inside upload_dir are touched; a file that is
+        still locked (Windows) is retried on the next sweep."""
+        if self.settings.keep_uploads:
+            return 0
+        upload_dir = Path(self.settings.upload_dir).resolve()
+        active = self.active["job_id"] if self.active is not None else None
+        deleted = 0
+        for job in self.store.finished_videos():
+            if job["job_id"] == active:
+                continue
+            path = Path(job["video_path"]).resolve()
+            if path.parent != upload_dir:
+                continue
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                continue
+            self.store.mark_video_deleted(job["job_id"])
+            deleted += 1
+        return deleted
+
     def step(self) -> None:
         if not self.entered:
             raise RuntimeError("Use Supervisor as a context manager")
@@ -418,6 +441,9 @@ class Supervisor:
                 self._stop_model()
                 self.active = None
         self._receive()
+        if now - self.last_purge >= 1:
+            self.purge_uploads()
+            self.last_purge = now
         if self.active is None:
             if self.process is not None and not self.process.is_alive():
                 self._stop_model()

@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     max_attempts: int = Field(default=3, ge=1, le=10)
     # One shared public key for the jury API, shown on the site's API page. False hides it and stops accepting it.
     public_api_keys: bool = True
+    # The uploaded video is deleted as soon as its job is done or failed; the result, evidence frames and
+    # file metadata stay in SQLite. True keeps videos on disk (local debugging only, never for jury runs).
+    keep_uploads: bool = False
 
     @property
     def db_path(self) -> Path:

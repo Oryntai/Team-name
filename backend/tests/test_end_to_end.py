@@ -107,3 +107,47 @@ def test_default_adapter_never_invents_clean_result(tmp_path):
             result = finish_jobs(client, supervisor, [job_id])[job_id][0]
         assert result == {"job_id": job_id, "status": "failed"}
         assert app.state.store.get(job_id)["error_code"] == "analysis_unavailable"
+
+
+def test_uploaded_videos_are_deleted_after_processing(tmp_path):
+    import hashlib
+    settings = settings_for(tmp_path, "multi")
+    content = make_video(tmp_path / "synthetic.mov", settings.ffmpeg_bin).read_bytes()
+    app = create_app(settings)
+    with TestClient(app) as client:
+        valid = client.post("/ui-api/analyze", files={"file": ("../jury/Video 1.mov", content)}).json()["job_id"]
+        corrupt = client.post("/ui-api/analyze", files={"file": ("broken.mov", b"not a video")}).json()["job_id"]
+        assert len(list(settings.upload_dir.glob("*.mov"))) == 2
+        with Supervisor(settings) as supervisor:
+            results = finish_jobs(client, supervisor, [valid, corrupt])
+            supervisor.last_purge = 0.0
+            supervisor.step()
+            jobs = {job_id: supervisor.store.get(job_id) for job_id in (valid, corrupt)}
+        # Both a successful and a failed job leave no video behind; the result stays pollable.
+        assert list(settings.upload_dir.glob("*.mov")) == []
+        assert all(job["video_deleted_at"] for job in jobs.values())
+        assert client.get(f"/ui-api/jobs/{valid}").json() == results[valid][0]
+        assert results[valid][0]["verdict"] == "violation"
+        assert jobs[valid]["original_name"] == "Video 1.mov"
+        assert jobs[valid]["video_bytes"] == len(content)
+        assert jobs[valid]["video_sha256"] == hashlib.sha256(content).hexdigest()
+
+
+def test_keep_uploads_and_files_outside_upload_dir_are_not_deleted(tmp_path):
+    settings = settings_for(tmp_path).model_copy(update={"keep_uploads": True})
+    video = make_video(tmp_path / "synthetic.mov", settings.ffmpeg_bin)
+    app = create_app(settings)
+    with TestClient(app) as client:
+        kept = client.post("/ui-api/analyze", files={"file": ("kept.mov", video.read_bytes())}).json()["job_id"]
+        with Supervisor(settings) as supervisor:
+            finish_jobs(client, supervisor, [kept])
+            assert supervisor.purge_uploads() == 0
+            assert len(list(settings.upload_dir.glob("*.mov"))) == 1
+            # A queued path outside upload_dir is never removed by the sweep.
+            now = time.time()
+            supervisor.store.enqueue("outside", video, now, now + 60, "clean", 5)
+            supervisor.settings = settings.model_copy(update={"keep_uploads": False})
+            finish_jobs(client, supervisor, ["outside"])
+            assert supervisor.purge_uploads() == 1
+    assert video.exists()
+    assert list(settings.upload_dir.glob("*.mov")) == []

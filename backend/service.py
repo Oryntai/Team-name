@@ -1,5 +1,6 @@
 """Shared upload/polling logic used by both the jury and the public UI."""
 
+import hashlib
 import os
 import time
 import uuid
@@ -38,11 +39,13 @@ class JobService:
             if Path(file.filename or "").suffix.lower() != ".mov":
                 raise HTTPException(415, "Expected a .mov video")
             total = 0
+            digest = hashlib.sha256()
             with temporary.open("xb") as output:
                 while chunk := await file.read(1024 * 1024):
                     if time.time() >= deadline_at:
                         raise HTTPException(408, "Upload deadline exceeded")
                     total += len(chunk)
+                    digest.update(chunk)
                     if total > self.settings.max_upload_bytes:
                         raise HTTPException(413, "Video exceeds configured size limit")
                     await run_in_threadpool(output.write, chunk)
@@ -58,6 +61,8 @@ class JobService:
                 await run_in_threadpool(
                     self.store.enqueue, job_id, destination, arrival_at, deadline_at,
                     self.settings.profile, self.settings.max_pending_jobs,
+                    original_name=Path(file.filename or "").name[:200] or None,
+                    video_bytes=total, video_sha256=digest.hexdigest(),
                 )
             except QueueFull:
                 raise HTTPException(503, "Analysis queue is full", headers={"Retry-After": "5"}) from None

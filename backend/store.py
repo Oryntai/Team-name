@@ -50,7 +50,11 @@ class Store:
                     finished_at REAL,
                     result_json TEXT,
                     diagnostics_json TEXT,
-                    error_code TEXT
+                    error_code TEXT,
+                    original_name TEXT,
+                    video_bytes INTEGER,
+                    video_sha256 TEXT,
+                    video_deleted_at REAL
                 );
                 CREATE INDEX IF NOT EXISTS jobs_pending ON jobs(status, arrival_at);
                 CREATE TABLE IF NOT EXISTS service_state (
@@ -65,8 +69,10 @@ class Store:
             """)
             connection.execute("BEGIN IMMEDIATE")
             columns = {row["name"] for row in connection.execute("PRAGMA table_info(jobs)")}
-            if "diagnostics_json" not in columns:
-                connection.execute("ALTER TABLE jobs ADD COLUMN diagnostics_json TEXT")
+            for column, kind in (("diagnostics_json", "TEXT"), ("original_name", "TEXT"), ("video_bytes", "INTEGER"),
+                                 ("video_sha256", "TEXT"), ("video_deleted_at", "REAL")):
+                if column not in columns:
+                    connection.execute(f"ALTER TABLE jobs ADD COLUMN {column} {kind}")
             connection.commit()
 
     def public_api_key(self, new_key: str | None = None) -> str | None:
@@ -101,7 +107,8 @@ class Store:
         ).rowcount
 
     def enqueue(self, job_id: str, video_path: Path, arrival_at: float,
-                deadline_at: float, profile: str, max_pending: int) -> dict:
+                deadline_at: float, profile: str, max_pending: int, *, original_name: str | None = None,
+                video_bytes: int | None = None, video_sha256: str | None = None) -> dict:
         if (not math.isfinite(arrival_at) or not math.isfinite(deadline_at)
                 or deadline_at <= arrival_at or max_pending < 1):
             raise ValueError("Invalid queue limits or timing")
@@ -118,10 +125,10 @@ class Store:
             expired = deadline_at <= now
             connection.execute(
                 "INSERT INTO jobs(job_id,video_path,arrival_at,deadline_at,profile,status,"
-                "finished_at,error_code) VALUES(?,?,?,?,?,?,?,?)",
+                "finished_at,error_code,original_name,video_bytes,video_sha256) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 (job_id, str(Path(video_path).resolve()), arrival_at, deadline_at, profile,
                  "failed" if expired else "queued", now if expired else None,
-                 "deadline_exceeded" if expired else None),
+                 "deadline_exceeded" if expired else None, original_name, video_bytes, video_sha256),
             )
             row = connection.execute("SELECT * FROM jobs WHERE job_id=?", (job_id,)).fetchone()
             connection.commit()
@@ -194,6 +201,19 @@ class Store:
                 "WHERE job_id=? AND status='running' AND attempt_token=?",
                 (time.time(), error_code, diagnostic_data, job_id, attempt_token),
             ).rowcount)
+
+    def finished_videos(self) -> list[dict]:
+        """Finished jobs whose uploaded video has not been deleted yet."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT job_id, video_path FROM jobs WHERE status IN ('done','failed') AND video_deleted_at IS NULL"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def mark_video_deleted(self, job_id: str) -> None:
+        with self._connect() as connection:
+            connection.execute("UPDATE jobs SET video_deleted_at=? WHERE job_id=? AND video_deleted_at IS NULL",
+                               (time.time(), job_id))
 
     def recover(self) -> int:
         """Call only while owning the process singleton lock, after an old worker exits."""
