@@ -1,0 +1,124 @@
+{
+  "$defs": {
+    "ObservedEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "t_start": {
+          "minimum": 0,
+          "title": "T Start",
+          "type": "number"
+        },
+        "t_end": {
+          "minimum": 0,
+          "title": "T End",
+          "type": "number"
+        },
+        "t_main": {
+          "minimum": 0,
+          "title": "T Main",
+          "type": "number"
+        },
+        "frame_pts": {
+          "items": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "title": "Frame Pts",
+          "type": "array"
+        },
+        "observations": {
+          "additionalProperties": {
+            "enum": [
+              "observed",
+              "not_observed",
+              "unclear"
+            ],
+            "type": "string"
+          },
+          "title": "Observations",
+          "type": "object"
+        },
+        "visibility": {
+          "additionalProperties": {
+            "enum": [
+              "clear",
+              "partial",
+              "unusable"
+            ],
+            "type": "string"
+          },
+          "title": "Visibility",
+          "type": "object"
+        },
+        "sources": {
+          "items": {
+            "enum": [
+              "vlm",
+              "motion",
+              "detector"
+            ],
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Sources",
+          "type": "array"
+        }
+      },
+      "required": [
+        "t_start",
+        "t_end",
+        "t_main",
+        "frame_pts",
+        "observations",
+        "sources"
+      ],
+      "title": "ObservedEvent",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "complete": {
+      "title": "Complete",
+      "type": "boolean"
+    },
+    "events": {
+      "items": {
+        "$ref": "#/$defs/ObservedEvent"
+      },
+      "title": "Events",
+      "type": "array"
+    },
+    "diagnostics": {
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "integer"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "title": "Diagnostics",
+      "type": "object"
+    }
+  },
+  "required": [
+    "complete",
+    "events"
+  ],
+  "title": "ObservationBatch",
+  "type": "object"
+}

@@ -1,0 +1,152 @@
+{
+  "$defs": {
+    "EvidenceFrame": {
+      "additionalProperties": false,
+      "properties": {
+        "timestamp_sec": {
+          "minimum": 0,
+          "title": "Timestamp Sec",
+          "type": "number"
+        },
+        "image_base64": {
+          "minLength": 1,
+          "title": "Image Base64",
+          "type": "string"
+        }
+      },
+      "required": [
+        "timestamp_sec",
+        "image_base64"
+      ],
+      "title": "EvidenceFrame",
+      "type": "object"
+    },
+    "JobDone": {
+      "additionalProperties": false,
+      "properties": {
+        "job_id": {
+          "title": "Job Id",
+          "type": "string"
+        },
+        "status": {
+          "const": "done",
+          "default": "done",
+          "title": "Status",
+          "type": "string"
+        },
+        "verdict": {
+          "enum": [
+            "violation",
+            "no_violation"
+          ],
+          "title": "Verdict",
+          "type": "string"
+        },
+        "violations": {
+          "items": {
+            "$ref": "#/$defs/Violation"
+          },
+          "title": "Violations",
+          "type": "array"
+        }
+      },
+      "required": [
+        "job_id",
+        "verdict",
+        "violations"
+      ],
+      "title": "JobDone",
+      "type": "object"
+    },
+    "JobFailed": {
+      "additionalProperties": false,
+      "properties": {
+        "job_id": {
+          "title": "Job Id",
+          "type": "string"
+        },
+        "status": {
+          "const": "failed",
+          "default": "failed",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "job_id"
+      ],
+      "title": "JobFailed",
+      "type": "object"
+    },
+    "JobProcessing": {
+      "additionalProperties": false,
+      "properties": {
+        "job_id": {
+          "title": "Job Id",
+          "type": "string"
+        },
+        "status": {
+          "const": "processing",
+          "default": "processing",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "job_id"
+      ],
+      "title": "JobProcessing",
+      "type": "object"
+    },
+    "Violation": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Type",
+          "type": "string"
+        },
+        "timecode_sec": {
+          "minimum": 0,
+          "title": "Timecode Sec",
+          "type": "number"
+        },
+        "description": {
+          "maxLength": 8000,
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "evidence_frames": {
+          "items": {
+            "$ref": "#/$defs/EvidenceFrame"
+          },
+          "maxItems": 3,
+          "minItems": 1,
+          "title": "Evidence Frames",
+          "type": "array"
+        }
+      },
+      "required": [
+        "type",
+        "timecode_sec",
+        "description",
+        "evidence_frames"
+      ],
+      "title": "Violation",
+      "type": "object"
+    }
+  },
+  "anyOf": [
+    {
+      "$ref": "#/$defs/JobProcessing"
+    },
+    {
+      "$ref": "#/$defs/JobFailed"
+    },
+    {
+      "$ref": "#/$defs/JobDone"
+    }
+  ]
+}

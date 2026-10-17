@@ -1,0 +1,80 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "t_start": {
+      "minimum": 0,
+      "title": "T Start",
+      "type": "number"
+    },
+    "t_end": {
+      "minimum": 0,
+      "title": "T End",
+      "type": "number"
+    },
+    "t_main": {
+      "minimum": 0,
+      "title": "T Main",
+      "type": "number"
+    },
+    "type": {
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Type",
+      "type": "string"
+    },
+    "description": {
+      "maxLength": 6000,
+      "minLength": 1,
+      "title": "Description",
+      "type": "string"
+    },
+    "rule_id": {
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Rule Id",
+      "type": "string"
+    },
+    "rule_title": {
+      "maxLength": 500,
+      "minLength": 1,
+      "title": "Rule Title",
+      "type": "string"
+    },
+    "rule_section": {
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Rule Section",
+      "type": "string"
+    },
+    "rule_url": {
+      "maxLength": 2000,
+      "pattern": "^https?://[^\\s]+$",
+      "title": "Rule Url",
+      "type": "string"
+    },
+    "frame_pts": {
+      "items": {
+        "minimum": 0,
+        "type": "number"
+      },
+      "maxItems": 3,
+      "minItems": 1,
+      "title": "Frame Pts",
+      "type": "array"
+    }
+  },
+  "required": [
+    "t_start",
+    "t_end",
+    "t_main",
+    "type",
+    "description",
+    "rule_id",
+    "rule_title",
+    "rule_section",
+    "rule_url",
+    "frame_pts"
+  ],
+  "title": "RuleEvent",
+  "type": "object"
+}

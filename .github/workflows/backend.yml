@@ -1,0 +1,41 @@
+name: Backend and decision checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    # Ubuntu 24.04 provides FFmpeg 6.1, including the display_rotation option
+    # used by the synthetic orientation fixture.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            decision/pyproject.toml
+            requirements.lock
+
+      - name: Install local video tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          ffmpeg -version
+          ffprobe -version
+
+      - name: Install backend and test dependencies
+        run: python -m pip install -c requirements.lock -e '.[dev]' -e './decision[dev]'
+
+      - name: Run synthetic backend and decision tests
+        run: python -m pytest backend/tests decision/tests data_tools/test_inventory.py rules/test_catalog.py

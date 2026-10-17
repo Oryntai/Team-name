@@ -1,0 +1,37 @@
+{
+  "accepted": {
+    "job_id": "example-job"
+  },
+  "processing": {
+    "job_id": "example-job",
+    "status": "processing"
+  },
+  "failed": {
+    "job_id": "example-job",
+    "status": "failed"
+  },
+  "no_violation": {
+    "job_id": "example-job",
+    "status": "done",
+    "verdict": "no_violation",
+    "violations": []
+  },
+  "violation": {
+    "job_id": "example-job",
+    "status": "done",
+    "verdict": "violation",
+    "violations": [
+      {
+        "type": "Synthetic contract example",
+        "timecode_sec": 1.2,
+        "description": "Synthetic observation, not a real finding. Example document, section 1. https://example.org/rules",
+        "evidence_frames": [
+          {
+            "timestamp_sec": 1.2,
+            "image_base64": "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAAIAAgDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDk6KKK9I4D/9k="
+          }
+        ]
+      }
+    ]
+  }
+}

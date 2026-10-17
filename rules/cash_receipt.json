@@ -1,0 +1,28 @@
+[
+  {
+    "rule_id": "KZ_NBK_231_P20_CLIENT_PRESENT",
+    "type": "Пересчёт принимаемых наличных в отсутствие клиента",
+    "title": "Присутствие клиента при приёме наличных",
+    "source_document": "Правила осуществления кассовых операций и операций по инкассации, постановление Правления НБРК от 29.11.2019 № 231",
+    "source_paragraph": "Параграф 2, пункт 20, абзац 1",
+    "source_url": "https://adilet.zan.kz/rus/docs/V1900019680",
+    "applicability": ["bank_cashier_role_established", "cash_receipt_operation_established"],
+    "required": ["cash_counting_observed", "client_absent_during_counting"],
+    "exceptions": [],
+    "visibility_required": ["counting_interval_fully_visible", "all_possible_client_positions_visible"],
+    "description_template": "При подтверждённой операции приёма наличных наблюдается пересчёт в отсутствие клиента. Это указывает на признаки возможного несоблюдения требования о присутствии клиента."
+  },
+  {
+    "rule_id": "KZ_NBK_231_P22_LEAVE_DURING_SERVICE",
+    "type": "Уход кассового работника до окончания обслуживания клиента",
+    "title": "Присутствие кассового работника до окончания обслуживания",
+    "source_document": "Правила осуществления кассовых операций и операций по инкассации, постановление Правления НБРК от 29.11.2019 № 231",
+    "source_paragraph": "Параграф 2, пункт 22",
+    "source_url": "https://adilet.zan.kz/rus/docs/V1900019680",
+    "applicability": ["bank_cashier_role_established", "cash_receipt_operation_established"],
+    "required": ["cashier_left_workstation", "departure_before_client_service_completed"],
+    "exceptions": [],
+    "visibility_required": ["workstation_and_exit_visible", "service_sequence_around_departure_visible"],
+    "description_template": "Наблюдается уход кассового работника с рабочего места до окончания обслуживания клиента при приёме наличных. Это указывает на признаки возможного несоблюдения требования оставаться на рабочем месте до окончания обслуживания."
+  }
+]
