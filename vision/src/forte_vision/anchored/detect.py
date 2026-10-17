@@ -75,14 +75,19 @@ def _split(t: float, dets: list[Det]) -> Frame:
 
 
 def dense_scan(path: str, fps: float = 5.0, *, detector, deadline: float | None = None, gray_width: int = 96,
-               min_fps: float = MIN_FPS) -> DenseScan:
-    """Один проход по файлу: детекции на сетке ~fps и серый кадр ширины gray_width на каждом взятом кадре.
+               min_fps: float = MIN_FPS, hi_width: int = 232, hi_fps: float = 2.0) -> DenseScan:
+    """Один проход по файлу: детекции на сетке ~fps и серый кадр ширины gray_width на каждом взятом кадре,
+    плюс ЦВЕТНОЙ кадр ширины hi_width с частотой hi_fps для предметов на столе: голубая пачка денег на светлом
+    дереве в сером почти не видна (разница яркости 8–10 из 255, X-38), а по цвету — 50–70.
 
     deadline — момент time.monotonic(), к которому проход должен закончиться; частота снижается по замеру.
     """
     batch_n = int(getattr(detector, "batch", 16))
     frames: list[Frame] = []
     grays: list[np.ndarray] = []
+    his: list[np.ndarray] = []
+    hi_t: list[float] = []
+    nxt_hi = 0.0
     pend: list[tuple[float, object]] = []
     cur_fps = fps
     t_start = time.monotonic()
@@ -137,6 +142,11 @@ def dense_scan(path: str, fps: float = 5.0, *, detector, deadline: float | None 
             while nxt <= t + 1e-6:
                 nxt += 1.0 / cur_fps
             grays.append(f.reformat(width=gw, height=gh, format="gray").to_ndarray().copy())
+            if hi_width and t + 1e-6 >= nxt_hi:
+                hh = max(8, round(hi_width * H / W))
+                his.append(f.reformat(width=hi_width, height=hh, format="rgb24").to_ndarray().copy())
+                hi_t.append(t)
+                nxt_hi = t + 1.0 / max(hi_fps, 0.1) - 1e-3
             pend.append((t, f.to_image()))
             if len(pend) >= batch_n:
                 flush()
@@ -147,7 +157,8 @@ def dense_scan(path: str, fps: float = 5.0, *, detector, deadline: float | None 
     duration = last_pts + 1.0 / rate
     eff = len(frames) / duration if duration > 0 else fps
     return DenseScan(duration=duration, width=W, height=H, fps=round(fps if eff >= 0.9 * fps else eff, 3),
-                     frames=frames, gray_t=[fr.t for fr in frames], gray=np.stack(grays).astype(np.uint8))
+                     frames=frames, gray_t=[fr.t for fr in frames], gray=np.stack(grays).astype(np.uint8),
+                     hi_t=hi_t, hi=np.stack(his).astype(np.uint8) if his else None)
 
 
 # --- кеш: <stem>.json (детекции) + <stem>.npy (серые кадры) ---
@@ -160,11 +171,13 @@ def save_scan(scan: DenseScan, stem: str | Path) -> None:
     stem = Path(stem)
     stem.parent.mkdir(parents=True, exist_ok=True)
     doc = {"duration": scan.duration, "width": scan.width, "height": scan.height, "fps": scan.fps,
-           "gray_t": list(scan.gray_t),
+           "gray_t": list(scan.gray_t), "hi_t": list(scan.hi_t),
            "frames": [{"t": f.t, "d": _dets(f.persons) + _dets(f.objects)} for f in scan.frames]}
     stem.with_suffix(".json").write_text(json.dumps(doc, separators=(",", ":")))
     if scan.gray is not None:
         np.save(stem.with_suffix(".npy"), np.asarray(scan.gray, dtype=np.uint8))
+    if scan.hi is not None:
+        np.save(stem.with_suffix(".hi.npy"), np.asarray(scan.hi, dtype=np.uint8))
 
 
 def load_scan(stem: str | Path) -> DenseScan:
@@ -173,4 +186,7 @@ def load_scan(stem: str | Path) -> DenseScan:
     frames = [_split(f["t"], [Det(tuple(x[1:5]), x[5], x[0]) for x in f["d"]]) for f in doc["frames"]]
     npy = stem.with_suffix(".npy")
     gray = np.load(npy) if npy.exists() else None
-    return DenseScan(doc["duration"], doc["width"], doc["height"], doc["fps"], frames, doc.get("gray_t", []), gray)
+    hi_npy = stem.with_suffix(".hi.npy")
+    hi = np.load(hi_npy) if hi_npy.exists() else None
+    return DenseScan(doc["duration"], doc["width"], doc["height"], doc["fps"], frames, doc.get("gray_t", []), gray,
+                     doc.get("hi_t", []) if hi is not None else [], hi)

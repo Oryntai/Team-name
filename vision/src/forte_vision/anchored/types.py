@@ -38,6 +38,8 @@ class DenseScan:
     frames: list[Frame]
     gray_t: list[float] = field(default_factory=list)  # времена серых кадров
     gray: object = None  # np.ndarray (N, h, w) uint8 или None
+    hi_t: list[float] = field(default_factory=list)  # цветные кадры покрупнее (~половина кадра, ~2 к/с) — для стола
+    hi: object = None  # np.ndarray (M, H, W, 3) uint8 RGB или None
 
 
 @dataclass
@@ -98,6 +100,17 @@ class Zones:
     diag: dict = field(default_factory=dict)
 
 
+@dataclass
+class DeskBlob:
+    """Новый предмет на столе по пикселям: появился в t_on и лежал (без рук на нём) до t_off."""
+
+    box: Box
+    t_on: float
+    t_off: float
+    area: float  # доля кадра
+    meta: dict = field(default_factory=dict)
+
+
 @dataclass(frozen=True)
 class CropItem:
     """Одна вырезка в пакетном вопросе: зона в момент t. key — уникальный ярлык, его повторяет ответ."""
@@ -109,6 +122,7 @@ class CropItem:
     question: str  # вопрос да/нет про ЭТУ вырезку, по-английски
     zoom: float = 1.0  # доп. увеличение (например, 6 для замка сейфа)
     choices: tuple[str, ...] = ()  # непусто: вопрос «что из этого видно», ответ — подмножество choices
+    open: bool = False  # с choices: модель сначала называет предмет своими словами (note), потом группу
 
 
 @dataclass
@@ -116,6 +130,7 @@ class CropAnswer:
     key: str
     answer: str  # "yes" | "no" | "unclear"; для вопроса с choices — "cash+food" | "none" | "unclear"
     raw: str = ""
+    note: str = ""  # open-вопрос: что это, словами модели («bundle of banknotes in plastic»)
 
     def has(self, want) -> bool:
         """Ответ «да» для проверки: yes, либо (для choices) в ответе есть что-то из want."""

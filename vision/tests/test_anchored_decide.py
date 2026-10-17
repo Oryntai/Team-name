@@ -17,7 +17,9 @@ def _answer(probes, yes_tags, desk="none"):
     out = {}
     for it in decide.all_items(probes):
         tag = it.key.split("@")[0]
-        if it.choices:
+        if it.choices and tag == "LOCK":  # экран: «да» = открыт документ
+            out[it.key] = CropAnswer(it.key, "document" if tag in yes_tags else "lock")
+        elif it.choices:
             out[it.key] = CropAnswer(it.key, desk)
         else:
             out[it.key] = CropAnswer(it.key, "yes" if tag in yes_tags else "no")
@@ -41,10 +43,12 @@ def test_single_yes_is_not_enough():
 
 
 def test_door_after_entering_and_mix_on_client_change():
-    ev = [Event("cashier_enters", 4.0), Event("client_change", 30.0, t_end=33.0)]
+    ev = [Event("cashier_enters", 4.0), Event("client_change", 30.0, t_end=33.0, meta={"prev_exit": 22.0, "t_seen": 29.0})]
     probes = decide.plan(_people(ev, present=((4.0, 60.0),)), Z, 60.0, door_open=lambda t: True)
     found = decide.judge(probes, _answer(probes, set(), desk="cash"))
-    assert [(f.check, f.t_main) for f in found] == [("DOOR", 5.0), ("MIX", 33.0)]
+    assert [(f.check, f.t_main) for f in found] == [("DOOR", 5.0), ("MIX", 30.0)]
+    mix = [it.t for it in decide.all_items(probes) if it.key.startswith("MIX@")]
+    assert all(22.0 < t < 29.0 for t in mix)  # до прихода следующего: его деньги не в счёт (X-5)
 
 
 def test_door_closed_soon_after_entering_is_fine():
@@ -87,7 +91,7 @@ def test_unclear_never_counts_as_yes():
 
 def test_cash_on_desk_is_not_food_and_mix_needs_cash_twice():
     """X-38: пачка денег прошлого клиента — это MIX, а не «еда»; одной вырезки с деньгами мало."""
-    ev = [Event("client_change", 30.0, t_end=33.0)]
+    ev = [Event("client_change", 30.0, t_end=33.0, meta={"prev_exit": 24.0, "t_seen": 30.0})]
     probes = decide.plan(_people(ev, present=((0.0, 60.0),)), Z, 60.0)
     assert [f.check for f in decide.judge(probes, _answer(probes, set(), desk="cash"))] == ["MIX"]
     answers = _answer(probes, set(), desk="none")
@@ -103,3 +107,21 @@ def test_food_and_items_share_one_desk_question():
     assert len({it.key for it in desk}) == len(desk)  # общий вопрос не задаётся дважды
     answers = _answer(probes, set(), desk="drink+documents")
     assert [f.check for f in decide.judge(probes, answers)] == ["FOOD"]
+
+
+def test_lock_screen_after_leaving_is_not_a_violation():
+    """X-23/X-29: синий экран входа Windows — не нарушение; белое окно документа (X-28) — нарушение."""
+    ev = [Event("cashier_leaves", 10.0, meta={"t_exit": 12.0})]
+    probes = decide.plan(_people(ev, present=((0.0, 10.0),)), Z, 30.0)
+    lock = [it for it in decide.all_items(probes) if it.key.startswith("LOCK@")]
+    assert lock and all(it.choices == decide.SCREEN_CHOICES for it in lock)
+    ans = _answer(probes, set())
+    for it in lock:
+        ans[it.key] = CropAnswer(it.key, "lock")
+    assert [f.check for f in decide.judge(probes, ans)] == []
+    for it in lock:
+        ans[it.key] = CropAnswer(it.key, "desktop+lock")
+    assert [f.check for f in decide.judge(probes, ans)] == []
+    for it in lock:
+        ans[it.key] = CropAnswer(it.key, "document")
+    assert [f.check for f in decide.judge(probes, ans)] == ["LOCK"]

@@ -175,16 +175,26 @@ _CHOICE_SYN = {
     "food": ("food", "snack", "sandwich", "plate", "lunch", "fruit", "apple", "cookie", "cookies", "candy"),
     "drink": ("drink", "cup", "mug", "glass", "bottle", "coffee", "tea", "water", "can"),
     "phone": ("phone", "smartphone", "mobile", "cellphone"),
+    "cash_bag": ("cash_bag", "sack", "collection"),
+    # экран
+    "document": ("document", "page", "table", "form", "window", "program", "spreadsheet", "text"),
+    "desktop": ("desktop", "icons", "taskbar"),
+    "lock": ("lock", "locked", "login", "signin", "sign", "password", "clock"),
+    "off": ("off", "black", "closed", "dark", "lid"),
 }
 
 
 def norm_choices(v, choices: Sequence[str]) -> str:
     """Ответ на вопрос «что из этого видно» -> "cash+food" | "none" | "unclear" (подмножество choices)."""
     if isinstance(v, dict):
-        v = next((v[k] for k in ("answer", "value", "items", "objects") if k in v), None)
+        g = next((v[k] for k in ("group", "class", "category", "answer", "value", "items", "objects") if k in v), None)
+        if g is None or norm_choices(g, choices) == "unclear":  # группа не распознана — по словам «what»
+            g = v.get("what", g)
+        v = g
     if v is None or isinstance(v, (bool, int, float)):
         return "unclear"
-    words = re.findall(r"[a-z]+", " ".join(map(str, v)).lower() if isinstance(v, list) else str(v).lower())
+    # cash_bag — одно слово: не дробить на cash + bag
+    words = re.findall(r"[a-z_]+", " ".join(map(str, v)).lower() if isinstance(v, list) else str(v).lower())
     if not words:
         return "none" if isinstance(v, list) else "unclear"
     got = set()
@@ -198,6 +208,18 @@ def norm_choices(v, choices: Sequence[str]) -> str:
     if any(w in ("none", "nothing", "no", "empty") for w in words):
         return "none"
     return "unclear"
+
+
+def parse_notes(text: str, keys: Sequence[str]) -> dict[str, str]:
+    """open-вопросы: {ключ: "what"} — что это, словами модели (для описания и разбора ошибок)."""
+    out: dict[str, str] = {}
+    by_norm = {_norm_key(k): k for k in keys}
+    for obj in _json_objects(text or ""):
+        for k, v in obj.items():
+            key = k if k in keys else by_norm.get(_norm_key(k))
+            if key and isinstance(v, dict) and isinstance(v.get("what"), str):
+                out.setdefault(key, v["what"].strip()[:60])
+    return out
 
 
 def _norm_key(s: str) -> str:
@@ -394,21 +416,28 @@ class CropAsker:
             text = f"Image {k} — key={it.key}, area={it.zone}, t={it.t:.1f}s. Question: {it.question}"
             content.append({"type": "text", "text": text})
             content.append({"type": "image_url", "image_url": {"url": _jpeg_url(im)}})
-        schema = ", ".join(
-            (f'"{it.key}": [' + "|".join(f'"{c}"' for c in it.choices) + ", ...]") if it.choices
-            else f'"{it.key}": "yes"|"no"|"unclear"' for it in items)
+        def one(it):
+            if it.choices and it.open:
+                return f'"{it.key}": {{"what": "<what it is, 1-4 words>", "group": ' + "|".join(f'"{c}"' for c in it.choices) + "}"
+            if it.choices:
+                return f'"{it.key}": [' + "|".join(f'"{c}"' for c in it.choices) + ", ...]"
+            return f'"{it.key}": "yes"|"no"|"unclear"'
+        schema = ", ".join(one(it) for it in items)
         tail = ("Return ONLY a JSON object, no other text: {" + schema + "}. "
                 'Use "unclear" if the image does not show enough to answer.')
-        if any(it.choices for it in items):
+        if any(it.choices and not it.open for it in items):
             tail += (' For a "which" question answer a list of every listed word that applies, '
                      'or ["none"] if none of them is there.')
+        if any(it.open for it in items):
+            tail += (' For a "what is it" question first name the object in your own words, then pick the closest '
+                     'group ("other" if none fits, "none" if there is no object).')
         content.append({"type": "text", "text": tail})
         return content
 
     def _chunk_key(self, vid: list, items: Sequence[CropItem], context: str) -> str:
         rec = [PROMPT_VERSION, self.model, vid, context.strip(),
                [[it.key, round(it.t, 3), it.zone, [round(v, 4) for v in it.box], it.question, round(it.zoom, 3)]
-                + ([list(it.choices)] if it.choices else []) for it in items]]
+                + ([list(it.choices)] if it.choices else []) + (["open"] if it.open else []) for it in items]]
         return hashlib.sha1(json.dumps(rec, ensure_ascii=False).encode()).hexdigest()
 
     def ask(self, video_path: str, items: Sequence[CropItem], context: str = "") -> list[CropAnswer]:
@@ -440,8 +469,10 @@ class CropAsker:
                 if err is None:
                     self._cache_put(key, {"raw": text, "keys": [it.key for it in ch]})
             parsed = parse_answers(text, [it.key for it in ch], {it.key: it.choices for it in ch if it.choices})
+            notes = parse_notes(text, [it.key for it in ch if it.open]) if any(it.open for it in ch) else {}
             for it in ch:
-                answers[it.key] = CropAnswer(it.key, parsed[it.key], text if err is None else f"error: {err}")
+                answers[it.key] = CropAnswer(it.key, parsed[it.key], text if err is None else f"error: {err}",
+                                             note=notes.get(it.key, ""))
         return [answers[it.key] for it in items]
 
     # --- grounding ---

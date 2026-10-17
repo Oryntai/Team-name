@@ -415,3 +415,25 @@ def test_parse_answers_mixed_yes_no_and_choices():
     text = '```json\n{"SAFEp@4": "no", "DESKp@4": ["cash"], "DESKp@8": ["none"]}\n```'
     got = parse_answers(text, ["SAFEp@4", "DESKp@4", "DESKp@8"], {"DESKp@4": ch, "DESKp@8": ch})
     assert got == {"SAFEp@4": "no", "DESKp@4": "cash", "DESKp@8": "none"}
+
+
+def test_open_question_group_and_note():
+    from forte_vision.anchored.ask import parse_notes
+    ch = ("cash", "documents", "bag", "food", "drink", "phone", "other", "none")
+    text = '{"OBJ0@13": {"what": "bundle of banknotes in plastic", "group": "cash"}, "OBJ1@5": {"what": "stapler", "group": "other"}, "OBJ2@7": {"what": "a coffee mug", "group": "?"}}'
+    keys = ["OBJ0@13", "OBJ1@5", "OBJ2@7"]
+    got = parse_answers(text, keys, {k: ch for k in keys})
+    assert got == {"OBJ0@13": "cash", "OBJ1@5": "other", "OBJ2@7": "drink"}  # группа не распознана -> по «what»
+    assert parse_notes(text, keys)["OBJ0@13"] == "bundle of banknotes in plastic"
+
+
+
+def test_cash_bag_is_one_word_and_screen_choices():
+    desk = ("cash", "documents", "cash_bag", "bag", "food", "drink", "phone", "none")
+    assert norm_choices(["cash_bag"], desk) == "cash_bag"
+    assert norm_choices(["cash_bag", "phone"], desk) == "cash_bag+phone"
+    scr = ("document", "desktop", "lock", "off")
+    assert norm_choices(["lock"], scr) == "lock"
+    assert norm_choices("a sign-in screen with a clock", scr) == "lock"
+    assert norm_choices(["document"], scr) == "document"
+    assert norm_choices("lid closed", scr) == "off"
