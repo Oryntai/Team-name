@@ -336,3 +336,67 @@ def test_default_adapter_cannot_produce_a_clean_verdict(worker_settings, synthet
         assert job["status"] == "failed"
         assert job["error_code"] == "analysis_unavailable"
         assert job["result"] is None
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process-group cleanup only")
+@pytest.mark.parametrize("platform,alive,recovers", [
+    ("darwin", False, True),
+    ("darwin", True, False),
+    ("linux", False, False),
+])
+def test_group_permission_failure_only_tolerated_for_dead_macos_model(
+    monkeypatch, platform, alive, recovers,
+):
+    """A dead Darwin group must not stall jobs; live/Linux EPERM stays visible."""
+    import backend.worker as worker_module
+
+    class Process:
+        pid = 123456
+        joined = False
+        closed = False
+
+        def is_alive(self):
+            return alive
+
+        def join(self, timeout):
+            assert timeout == 2
+            self.joined = True
+
+        def close(self):
+            self.closed = True
+
+    class Connection:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    supervisor = Supervisor.__new__(Supervisor)
+    process = Process()
+    connection = Connection()
+    supervisor.process = process
+    supervisor.connection = connection
+    supervisor.guard = None
+    supervisor.entered = False
+    supervisor.model_ready = True
+    attempts = []
+
+    def denied(pid, signum):
+        attempts.append((pid, signum))
+        raise PermissionError("synthetic group permission failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(worker_module.sys, "platform", platform)
+        patch.setattr(worker_module.os, "killpg", denied)
+        if recovers:
+            supervisor._stop_model()
+        else:
+            with pytest.raises(PermissionError):
+                supervisor._stop_model()
+    assert attempts == [(process.pid, worker_module.signal.SIGKILL)]
+    if recovers:
+        assert process.joined and process.closed and connection.closed
+        assert supervisor.process is None and supervisor.connection is None
+        assert supervisor.model_ready is False
+    else:
+        assert not process.closed and not connection.closed

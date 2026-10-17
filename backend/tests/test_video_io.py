@@ -39,17 +39,21 @@ def test_vfr_pts_nonzero_start_and_matching_frame_content(tmp_path):
         "drawbox=x=0:y=0:w=iw:h=ih:color=green:t=fill:enable='eq(n,1)',"
         "drawbox=x=0:y=0:w=iw:h=ih:color=blue:t=fill:enable='eq(n,4)',"
         "drawbox=x=0:y=0:w=iw:h=ih:color=white:t=fill:enable='eq(n,9)',"
-        "select='eq(n,0)+eq(n,1)+eq(n,4)+eq(n,9)',setpts=PTS+2/TB"
+        "select='eq(n,0)+eq(n,1)+eq(n,4)+eq(n,9)'"
     )
     subprocess.run([
         ffmpeg, "-v", "error", "-nostdin", "-y", "-f", "lavfi", "-i",
         "color=c=black:size=96x64:rate=10:duration=1", "-vf", filters,
         "-fps_mode", "vfr", "-c:v", "libx264", "-threads", "1", "-bf", "0",
-        "-g", "1", "-video_track_timescale", "1000", str(path),
+        # Offset at the muxer, after encoding: on FFmpeg 7, shifting PTS
+        # inside the filter creates an edit list ending before the last frame.
+        # That malformed fixture declares four frames but exposes only three.
+        "-g", "1", "-video_track_timescale", "1000", "-output_ts_offset", "2", str(path),
     ], check=True, capture_output=True, timeout=60)
     video = video_io(path)
     metadata = video.validate()
     assert metadata.start_time_sec == pytest.approx(2.0)
+    assert metadata.duration_sec == pytest.approx(1.0)
     assert metadata.frame_pts == pytest.approx([0, 0.1, 0.4, 0.9])
     expected = [(250, 0, 0), (0, 125, 0), (0, 0, 250), (250, 250, 250)]
     for pts, color in zip(metadata.frame_pts, expected):

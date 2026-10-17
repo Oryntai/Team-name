@@ -341,6 +341,13 @@ class Supervisor:
                     os.killpg(process.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
+                except PermissionError:
+                    # On native macOS a vanished process group can report EPERM
+                    # after its leader crashes. Still attempt group cleanup above,
+                    # but do not let that dead leader block queue recovery. A live
+                    # model, or the same failure on another OS, remains an error.
+                    if sys.platform != "darwin" or process.is_alive():
+                        raise
             if process.is_alive():
                 if os.name == "nt":
                     subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
