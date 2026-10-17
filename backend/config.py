@@ -51,9 +51,13 @@ class Settings(BaseSettings):
     def validate_configuration(self) -> "Settings":
         self.data_dir = self.data_dir.expanduser().resolve()
         self.frontend_dist = self.frontend_dist.expanduser().resolve()
+        jury_key = self.api_key.get_secret_value()
+        normalized_key = jury_key.casefold()
+        if jury_key and normalized_key.startswith(("replace-with-", "your-", "change-me")):
+            raise ValueError("FORTE_API_KEY must not use a placeholder value")
         if self.environment == "production":
             if not self.plugins_configured:
                 raise ValueError("Production requires real analyzer and rules factories; development/test adapters are forbidden")
-            if len(self.api_key.get_secret_value()) < 16 or self.api_key.get_secret_value() == "replace-with-a-long-random-secret":
-                raise ValueError("Production requires FORTE_API_KEY with at least 16 characters")
+            if len(jury_key) < 32:
+                raise ValueError("Production requires a generated FORTE_API_KEY with at least 32 characters")
         return self

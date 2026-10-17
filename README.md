@@ -16,13 +16,13 @@ Backend принимает видео, сохраняет задание в SQLi
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -c requirements.lock -e ".[dev]"
 Copy-Item .env.example .env
-# Сгенерировать значение для FORTE_API_KEY и сохранить его в .env:
-.\.venv\Scripts\python.exe -c "import secrets; print(secrets.token_urlsafe(32))"
+# Создать ключ жюри, сохранить его в .env и вывести один раз в терминал:
+.\.venv\Scripts\python.exe infra\generate_jury_key.py
 ffmpeg -version
 ffprobe -version
 ```
 
-Если FFmpeg не в `PATH`, указать абсолютные пути к `ffmpeg.exe` и `ffprobe.exe` в `.env`. Дистрибутивы доступны через [страницу FFmpeg](https://ffmpeg.org/download.html). Значение `replace-with-a-long-random-secret` необходимо заменить.
+Если FFmpeg не в `PATH`, указать абсолютные пути к `ffmpeg.exe` и `ffprobe.exe` в `.env`. Дистрибутивы доступны через [страницу FFmpeg](https://ffmpeg.org/download.html). Повторный запуск генератора не заменяет существующий ключ; для плановой ротации используйте `--rotate`.
 
 Первый терминал:
 
@@ -45,8 +45,7 @@ python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -c requirements.lock -e '.[dev]'
 cp .env.example .env
-python -c 'import secrets; print(secrets.token_urlsafe(32))'
-# Сохранить сгенерированное значение как FORTE_API_KEY в .env.
+python infra/generate_jury_key.py
 # Установить ffmpeg/ffprobe средствами своей ОС и проверить:
 ffmpeg -version
 ffprobe -version
@@ -68,6 +67,8 @@ Backend: `http://localhost:8000`. Frontend dev server: `http://localhost:5173`, 
 Загрузка — `multipart/form-data`, поле `file`. Ответ: `{"job_id":"..."}`. Опрос раз в 1–2 секунды до `done` или `failed`. Очередь и работа модели отображаются одинаково: `processing`. В production FastAPI может раздавать готовый `frontend/dist` на том же origin; сборку frontend нужно предоставить отдельно.
 
 Ключ жюри остаётся на сервере. Не помещать его в `VITE_*`, JavaScript или публичные файлы. `/ui-api` намеренно доступен без ключа и использует ту же ограниченную очередь.
+
+Порядок выдачи и использования ключа жюри: [docs/jury-api-access.md](docs/jury-api-access.md). Не публиковать рабочий ключ в открытом репозитории: он даёт доступ к загрузке видео и опросу результатов.
 
 Полные схемы и интерфейс ML: [contracts/README.md](contracts/README.md), [backend/contracts.py](backend/contracts.py).
 
