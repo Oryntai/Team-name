@@ -1,0 +1,31 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "job_id": {
+      "title": "Job Id",
+      "type": "string"
+    },
+    "video_path": {
+      "format": "path",
+      "title": "Video Path",
+      "type": "string"
+    },
+    "deadline_at": {
+      "description": "Absolute UTC Unix seconds, including upload and queue time",
+      "title": "Deadline At",
+      "type": "number"
+    },
+    "profile": {
+      "default": "standard",
+      "title": "Profile",
+      "type": "string"
+    }
+  },
+  "required": [
+    "job_id",
+    "video_path",
+    "deadline_at"
+  ],
+  "title": "AnalysisContext",
+  "type": "object"
+}
