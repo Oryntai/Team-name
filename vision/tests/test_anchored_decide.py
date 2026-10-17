@@ -17,7 +17,9 @@ def _answer(probes, yes_tags, desk="none"):
     out = {}
     for it in decide.all_items(probes):
         tag = it.key.split("@")[0]
-        if it.choices:
+        if it.choices and tag == "LOCK":  # экран: «да» = открыт документ
+            out[it.key] = CropAnswer(it.key, "document" if tag in yes_tags else "lock")
+        elif it.choices:
             out[it.key] = CropAnswer(it.key, desk)
         else:
             out[it.key] = CropAnswer(it.key, "yes" if tag in yes_tags else "no")
@@ -41,10 +43,12 @@ def test_single_yes_is_not_enough():
 
 
 def test_door_after_entering_and_mix_on_client_change():
-    ev = [Event("cashier_enters", 4.0), Event("client_change", 30.0, t_end=33.0)]
+    ev = [Event("cashier_enters", 4.0), Event("client_change", 30.0, t_end=33.0, meta={"prev_exit": 22.0, "t_seen": 29.0})]
     probes = decide.plan(_people(ev, present=((4.0, 60.0),)), Z, 60.0, door_open=lambda t: True)
     found = decide.judge(probes, _answer(probes, set(), desk="cash"))
-    assert [(f.check, f.t_main) for f in found] == [("DOOR", 5.0), ("MIX", 33.0)]
+    assert [(f.check, f.t_main) for f in found] == [("DOOR", 5.0), ("MIX", 30.0)]
+    mix = [it.t for it in decide.all_items(probes) if it.key.startswith("MIX@")]
+    assert all(22.0 < t < 29.0 for t in mix)  # до прихода следующего: его деньги не в счёт (X-5)
 
 
 def test_door_closed_soon_after_entering_is_fine():
@@ -87,7 +91,7 @@ def test_unclear_never_counts_as_yes():
 
 def test_cash_on_desk_is_not_food_and_mix_needs_cash_twice():
     """X-38: пачка денег прошлого клиента — это MIX, а не «еда»; одной вырезки с деньгами мало."""
-    ev = [Event("client_change", 30.0, t_end=33.0)]
+    ev = [Event("client_change", 30.0, t_end=33.0, meta={"prev_exit": 24.0, "t_seen": 30.0})]
     probes = decide.plan(_people(ev, present=((0.0, 60.0),)), Z, 60.0)
     assert [f.check for f in decide.judge(probes, _answer(probes, set(), desk="cash"))] == ["MIX"]
     answers = _answer(probes, set(), desk="none")
@@ -103,3 +107,58 @@ def test_food_and_items_share_one_desk_question():
     assert len({it.key for it in desk}) == len(desk)  # общий вопрос не задаётся дважды
     answers = _answer(probes, set(), desk="drink+documents")
     assert [f.check for f in decide.judge(probes, answers)] == ["FOOD"]
+
+
+def test_lock_screen_after_leaving_is_not_a_violation():
+    """X-23/X-29: синий экран входа Windows — не нарушение; белое окно документа (X-28) — нарушение."""
+    ev = [Event("cashier_leaves", 10.0, meta={"t_exit": 12.0})]
+    probes = decide.plan(_people(ev, present=((0.0, 10.0),)), Z, 30.0)
+    lock = [it for it in decide.all_items(probes) if it.key.startswith("LOCK@")]
+    assert lock and all(it.choices == decide.SCREEN_CHOICES for it in lock)
+    ans = _answer(probes, set())
+    for it in lock:
+        ans[it.key] = CropAnswer(it.key, "lock")
+    assert [f.check for f in decide.judge(probes, ans)] == []
+    for it in lock:
+        ans[it.key] = CropAnswer(it.key, "desktop+lock")
+    assert [f.check for f in decide.judge(probes, ans)] == []
+    for it in lock:
+        ans[it.key] = CropAnswer(it.key, "document")
+    assert [f.check for f in decide.judge(probes, ans)] == ["LOCK"]
+
+
+def test_second_visitor_across_during_visit_is_queue_violation_timed_when_he_stops():
+    """X-18: второй подошёл к столу, пока первый сидит; таймкод — когда дошёл и встал, а не когда появился."""
+    walk = [(0.05 + 0.03 * k, 0.2, 0.15 + 0.03 * k, 0.45) for k in range(10)] + [(0.35, 0.2, 0.45, 0.45)] * 15
+    late = Track(tid=7, t=[15.0 + 0.4 * k for k in range(25)], boxes=walk, conf=[0.9] * 25)
+    ev = [Event("third_person", 15.0, 24.6, {"side": "across", "tid": 7})]
+    people = _people(ev, present=((0.0, 30.0),))
+    people.visitors = [late]
+    probes = decide.plan(people, Z, 30.0)
+    found = decide.judge(probes, _answer(probes, set()))
+    assert [f.check for f in found] == ["QUE"] and 18.5 <= found[0].t_main <= 19.5
+    ev_level = [Event("third_person", 15.0, 24.6, {"side": "level", "tid": 7})]  # рядом с кассиром — не очередь
+    p2 = _people(ev_level, present=((0.0, 30.0),))
+    p2.visitors = [late]
+    assert [f.check for f in decide.judge(decide.plan(p2, Z, 30.0), {})] == []
+
+
+def test_documents_left_after_leaving_and_safe_left_open_after_sitting_back():
+    """X-24: папка лежит весь ролик, кассир ушла -> LEAVE по вопросу с вариантами.
+    X-20: сходила к сейфу (встала 4.4), села 6.0, сейф открыт через 1 и 3 с -> SAFE."""
+    ev = [Event("cashier_leaves", 8.0, meta={"t_exit": 9.0})]
+    probes = decide.plan(_people(ev, present=((0.0, 8.0),)), Z, 15.0)
+    ans = _answer(probes, set(), desk="documents")
+    assert [f.check for f in decide.judge(probes, ans)] == ["LEAVE"]
+    ans = _answer(probes, set(), desk="cash_bag")
+    assert [f.check for f in decide.judge(probes, ans)] == ["BAG"]
+    ev2 = [Event("cashier_stands", 4.4, t_end=6.0), Event("cashier_sits", 6.0)]
+    probes2 = decide.plan(_people(ev2, present=((0.0, 4.4), (6.0, 11.6))), Z, 11.6)
+    safe = [it for it in decide.all_items(probes2) if it.key.startswith("SAFEs@")]
+    assert [it.t for it in safe] == [7.0, 9.0]
+    ans2 = _answer(probes2, set())
+    for it in safe:
+        ans2[it.key] = CropAnswer(it.key, "yes")
+    assert [(f.check, f.t_main) for f in decide.judge(probes2, ans2)] == [("SAFE", 5.5)]
+    ans2[safe[1].key] = CropAnswer(safe[1].key, "no")  # закрыла через пару секунд — не нарушение
+    assert decide.judge(probes2, ans2) == []

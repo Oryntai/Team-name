@@ -158,7 +158,8 @@ def test_ask_batches_cache_and_prompt(synthetic_video, tmp_path):
     assert sum(c["type"] == "image_url" for c in content) == MAX_ITEMS
     assert content[0]["text"].startswith("Known facts from the video: Cashier left at 12.0 s.")
     assert "You see" not in content[0]["text"]  # без frames_preamble
-    assert content[1]["text"].startswith("Image 1 — key=k0, area=safe, t=1.0s. Question: Is the safe door open?")
+    assert "Q1: Is the safe door open?" in content[0]["text"]  # вопрос один раз на пакет
+    assert content[1]["text"].startswith("Image 1 — key=k0, area=safe, t=1.0s. Question: Q1")
     assert content[2]["type"] == "image_url" and content[2]["image_url"]["url"].startswith("data:image/jpeg;base64,")
     assert "Return ONLY a JSON object" in content[-1]["text"] and '"k7": "yes"|"no"|"unclear"' in content[-1]["text"]
     assert b0["temperature"] == 0.0 and b0["max_tokens"] == 12 * MAX_ITEMS + 40
@@ -415,3 +416,35 @@ def test_parse_answers_mixed_yes_no_and_choices():
     text = '```json\n{"SAFEp@4": "no", "DESKp@4": ["cash"], "DESKp@8": ["none"]}\n```'
     got = parse_answers(text, ["SAFEp@4", "DESKp@4", "DESKp@8"], {"DESKp@4": ch, "DESKp@8": ch})
     assert got == {"SAFEp@4": "no", "DESKp@4": "cash", "DESKp@8": "none"}
+
+
+def test_open_question_group_and_note():
+    from forte_vision.anchored.ask import parse_notes
+    ch = ("cash", "documents", "bag", "food", "drink", "phone", "other", "none")
+    text = '{"OBJ0@13": {"what": "bundle of banknotes in plastic", "group": "cash"}, "OBJ1@5": {"what": "stapler", "group": "other"}, "OBJ2@7": {"what": "a coffee mug", "group": "?"}}'
+    keys = ["OBJ0@13", "OBJ1@5", "OBJ2@7"]
+    got = parse_answers(text, keys, {k: ch for k in keys})
+    assert got == {"OBJ0@13": "cash", "OBJ1@5": "other", "OBJ2@7": "drink"}  # группа не распознана -> по «what»
+    assert parse_notes(text, keys)["OBJ0@13"] == "bundle of banknotes in plastic"
+
+
+
+def test_cash_bag_is_one_word_and_screen_choices():
+    desk = ("cash", "documents", "cash_bag", "bag", "food", "drink", "phone", "none")
+    assert norm_choices(["cash_bag"], desk) == "cash_bag"
+    assert norm_choices(["cash_bag", "phone"], desk) == "cash_bag+phone"
+    scr = ("document", "desktop", "lock", "off")
+    assert norm_choices(["lock"], scr) == "lock"
+    assert norm_choices("a sign-in screen with a clock", scr) == "lock"
+    assert norm_choices(["document"], scr) == "document"
+    assert norm_choices("lid closed", scr) == "off"
+
+
+def test_video_id_is_by_content_not_name(tmp_path):
+    """Оценка кладёт ролик ссылкой <job_id>.mov: ключ кеша не должен зависеть от имени."""
+    from forte_vision.anchored.ask import CropAsker
+    a, b, c = tmp_path / "job1.mov", tmp_path / "job2.mov", tmp_path / "other.mov"
+    a.write_bytes(b"x" * 5000)
+    b.write_bytes(b"x" * 5000)
+    c.write_bytes(b"y" * 5000)
+    assert CropAsker._video_id(str(a)) == CropAsker._video_id(str(b)) != CropAsker._video_id(str(c))

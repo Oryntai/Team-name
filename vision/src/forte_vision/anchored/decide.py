@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .types import Box, CropAnswer, CropItem, Event, People, Zones
+from .types import Box, CropAnswer, CropItem, DeskBlob, Event, People, Zones
 
 # Проверка -> предикат каталога rules/cash_checks.json (тот же словарь, что timeline.CHECKS).
 PREDICATE = {
@@ -27,6 +27,8 @@ PREDICATE = {
     "ITEMS": "personal_items_on_desk",
     "FOOD": "food_or_drink_at_desk",
     "KEYS": "keys_left_in_safe_lock",  # выдаётся, только если правило есть в загруженном каталоге
+    "QUE": "served_out_of_queue",
+    "BAG": "collection_bag_left_uncounted",
 }
 
 Q = {
@@ -43,11 +45,31 @@ Q = {
     # один вопрос с вариантами вместо отдельных «да/нет»: выбирая, модель не путает пачку денег с едой (X-38)
     "desk_what": "Which of these are lying on this desk (not held in someone's hands)? "
                  "cash = paper banknotes or a bundle of banknotes, also in a paper band or a plastic pack; "
-                 "documents = papers, forms, a passport, a folder; bag = a handbag, bag, backpack, coat or jacket; "
+                 "documents = papers, forms, a passport, a folder; "
+                 "cash_bag = a cloth cash-collection sack (often grey or white, with a seal, tag or zip); "
+                 "bag = a personal handbag or backpack, or a coat or jacket nobody is wearing; "
                  "food = any food or snack; drink = a cup, mug, glass or bottle; phone = a mobile phone. "
-                 "A laptop, keyboard, mouse, desk telephone and counting machine do not count.",
+                 "A laptop (open or closed), keyboard, mouse, desk telephone, counting machine and clothes worn by "
+                 "people do not count.",
+    # экран после ухода: выбор вместо «включён ли». Экран входа Windows (синий) модель считала «включённым»,
+    # и проверка срабатывала на чистых близнецах X-23/X-29; документ на экране — белое окно (X-11, X-28)
+    "screen_what": "What does this laptop or monitor screen show? document = a white page, a table, a form or a "
+                   "program window; desktop = a desktop with icons and a taskbar; lock = a lock or sign-in screen "
+                   "(a full-screen picture or plain colour, maybe a big clock or a user name, no windows); "
+                   "off = black or switched off, or the lid is closed.",
 }
-DESK_CHOICES = ("cash", "documents", "bag", "food", "drink", "phone", "none")
+DESK_CHOICES = ("cash", "documents", "cash_bag", "bag", "food", "drink", "phone", "none")
+# новый предмет на столе (пятно от desk.desk_blobs): сначала «что это» словами, потом группа
+Q["desk_obj"] = ("Look at the object in the middle of this crop, lying on the desk (ignore people and hands). "
+                 "What is it? cash = paper banknotes or a bundle of banknotes, also in a paper band or a plastic pack; "
+                 "documents = papers, forms, a passport, a folder; "
+                 "cash_bag = a cloth cash-collection sack (often grey or white, with a seal, tag or zip); "
+                 "bag = a personal handbag or backpack, or a coat or jacket nobody is wearing; "
+                 "food = any food or snack; drink = a cup, mug, glass or bottle; phone = a mobile phone; "
+                 "other = any other object; none = no object, just the desk surface, a shadow or equipment "
+                 "(laptop, telephone, counting machine).")
+OBJ_CHOICES = ("cash", "documents", "cash_bag", "bag", "food", "drink", "phone", "other", "none")
+SCREEN_CHOICES = ("document", "desktop", "lock", "off")
 
 
 @dataclass
@@ -83,9 +105,27 @@ def _clip(t: float, dur: float) -> float:
 def _items(tag: str, zone: str, box: Box | None, times, q: str, dur: float, zoom: float = 1.0) -> list[CropItem]:
     if box is None:
         return []
-    ch = DESK_CHOICES if q == "desk_what" else ()
+    ch = {"desk_what": DESK_CHOICES, "desk_obj": OBJ_CHOICES, "screen_what": SCREEN_CHOICES}.get(q, ())
     return [CropItem(key=f"{tag}@{_clip(t, dur):g}", t=_clip(t, dur), zone=zone, box=box, question=Q[q], zoom=zoom,
-                     choices=ch) for t in times]
+                     choices=ch, open=q == "desk_obj") for t in times]
+
+
+def _grow(box: Box, min_w: float = 0.12, min_h: float = 0.07) -> Box:
+    """Рамка вокруг пятна с контекстом: предмет в середине, но видно, что это стол (пачка денег — 15 px)."""
+    cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+    w, h = max(min_w, 2.0 * (box[2] - box[0])), max(min_h, 2.0 * (box[3] - box[1]))
+    x1, y1 = min(max(0.0, cx - w / 2), 1.0 - w), min(max(0.0, cy - h / 2), 1.0 - h)
+    return (round(max(0.0, x1), 4), round(max(0.0, y1), 4), round(min(1.0, x1 + w), 4), round(min(1.0, y1 + h), 4))
+
+
+def blob_items(blobs: list[DeskBlob], dur: float) -> list[tuple[DeskBlob, list[CropItem]]]:
+    """Две вырезки на каждое пятно: вскоре после появления и попозже (пока лежит)."""
+    out = []
+    for i, b in enumerate(blobs):
+        t1 = b.t_on + 1.0
+        t2 = max(t1 + 1.0, min(b.t_on + 3.5, b.t_off - 0.5))
+        out.append((b, _items(f"OBJ{i}", "desk", _grow(b.box), [t1, t2], "desk_obj", dur)))
+    return out
 
 
 def _yes(answers: dict[str, CropAnswer], it: CropItem, want=()) -> bool:
@@ -110,9 +150,11 @@ def _leave_time(e: Event) -> float:
 
 
 def plan(people: People, zones: Zones, dur: float, *, known_predicates: set[str] | None = None,
-         periodic_step: float = 4.0, door_open=None) -> list[Probe]:
+         periodic_step: float = 4.0, door_open=None, blobs: list[DeskBlob] | None = None) -> list[Probe]:
     """Список проверок для ролика. Ничего не спрашивает у модели.
-    door_open(t) -> bool | None — состояние двери по пикселям (VLM открытую дверь на вырезке не различает)."""
+    door_open(t) -> bool | None — состояние двери по пикселям (VLM открытую дверь на вырезке не различает).
+    blobs — новые предметы на столе по пикселям (desk.desk_blobs). Если заданы (даже пустой список), вещи и еда
+    проверяются только по ним, а слепой обход стола выключен: он давал ложные тревоги на чистых роликах."""
     z = zones.boxes
     ev = people.events
     probes: list[Probe] = []
@@ -127,14 +169,32 @@ def plan(people: People, zones: Zones, dur: float, *, known_predicates: set[str]
             gone = e.t + 1.0
         ts = [gone + 0.5, min(gone + 3.0, hi), min(gone + 6.0, hi)]
         t_main = _leave_time(e)
-        for check, zone, q in (("LOCK", "screen", "screen_on"), ("LEAVE", "desk", "desk_valuables"),
-                               ("SAFE", "safe", "safe_open")):
+        # LOCK: только открытый документ/окно (белое) — синий экран входа и рабочий стол на 464 px не различить.
+        # Стол после ухода — вопрос с вариантами, а не «есть ли ценности?»: на него X-24 (папка с документами
+        # лежит весь ролик) получил 0 «да» из 3. LEAVE и BAG читают одни и те же вырезки (ключи LEAVE@t).
+        for check, zone, q, tag, want in (("LOCK", "screen", "screen_what", "LOCK", ("document",)),
+                                          ("LEAVE", "desk", "desk_what", "LEAVE", ("cash", "documents")),
+                                          ("BAG", "desk", "desk_what", "LEAVE", ("cash_bag",)),
+                                          ("SAFE", "safe", "safe_open", "SAFE", ())):
             if allow(check):
-                probes.append(Probe(check, t_main, _items(check, zone, z.get(zone), ts, q, dur),
-                                    t_start=t_main, t_end=_clip(ts[-1], dur), reason=f"после ухода кассира в {e.t:.1f} с"))
+                probes.append(Probe(check, t_main, _items(tag, zone, z.get(zone), ts, q, dur),
+                                    t_start=t_main, t_end=_clip(ts[-1], dur), reason=f"после ухода кассира в {e.t:.1f} с",
+                                    want=want))
         if allow("KEYS"):
             probes.append(Probe("KEYS", t_main, _items("KEYS", "safe", z.get("safe"), ts[:2], "safe_key", dur, zoom=6.0),
                                 t_start=t_main, t_end=_clip(ts[1], dur), reason="ключ в замке после ухода"))
+        # 1б) Ценность так и лежит на столе после ухода: пятно появилось до ухода и не исчезло. Что это — по плотной
+        #     вырезке: когда положили (OBJi@) и уже без кассира (OBJix@). X-15 — зелёный инкассаторский мешок, X-13 —
+        #     пачка купюр; широкий вопрос «есть ли на столе ценности» по всему столу их не видел (0 «да» из 3).
+        for i, (b, its) in enumerate(blob_items(blobs or [], dur)):
+            if not its or b.t_on > gone - 0.5 or b.t_off < min(gone + 1.0, dur - 0.5):
+                continue
+            after = _items(f"OBJ{i}x", "desk", its[0].box, [min(gone + 1.0, max(gone, hi - 0.2))], "desk_obj", dur)
+            for check, want in (("LEAVE", ("cash", "documents")), ("BAG", ("cash_bag",))):
+                if allow(check):
+                    probes.append(Probe(check, t_main, its + after, need_yes=2, t_start=t_main,
+                                        t_end=_clip(gone + 1.0, dur), want=want,
+                                        reason=f"на столе осталось после ухода кассира в {e.t:.1f} с"))
 
     # 2) Кассир вошла: дверь за собой, личные вещи на столе.
     for e in [e for e in ev if e.kind in ("cashier_enters", "cashier_sits")]:
@@ -149,12 +209,46 @@ def plan(people: People, zones: Zones, dur: float, *, known_predicates: set[str]
                 probes.append(Probe("DOOR", t_in + 1.0, [], t_start=t_in, t_end=_clip(late[-1], dur),
                                     reason=f"дверь после входа кассира в {t_in:.1f} с", fixed=all(states)))
 
-    # 3) Смена клиентов: деньги предыдущего на столе, когда садится следующий.
-    for e in [e for e in ev if e.kind == "client_change"]:
-        t2 = e.t_end if e.t_end is not None else e.t
+    # 2б) Вернулась на место после того, как вставала (часто — к сейфу): сейф закрыт? X-20: сходила к сейфу, села,
+    #     сейф остался открытым; обход эти моменты пропускает — кассир «у сейфа», когда стол стоит рядом с ним.
+    for e in [e for e in ev if e.kind == "cashier_sits" and e.meta.get("after") != "enter"]:
+        if not allow("SAFE") or not _first(ev, "cashier_stands", after=e.t - 30.0, before=e.t):
+            continue
+        ts2 = [t for t in (e.t + 1.0, e.t + 3.0) if t < dur - 0.1]
+        if len(ts2) == 2:
+            probes.append(Probe("SAFE", max(0.0, e.t - 0.5), _items("SAFEs", "safe", z.get("safe"), ts2, "safe_open", dur),
+                                need_yes=2, t_start=max(0.0, e.t - 0.5), t_end=_clip(ts2[-1], dur),
+                                reason=f"сейф после возвращения на место в {e.t:.1f} с"))
+
+    # 3) Смена клиентов: деньги предыдущего клиента ещё на столе, когда подходит следующий.
+    #    Смотрим в конце промежутка между клиентами, до того как новый что-то отдал: после его прихода на столе
+    #    уже его собственные деньги (X-5 — ложная тревога). Таймкод — приход следующего (X-38: эталон 33, пришёл 34.8).
+    for k, e in enumerate([e for e in ev if e.kind == "client_change"]):
+        hi = min(float(e.meta.get("t_seen", e.t)), e.t) - 0.3
+        lo = float(e.meta.get("prev_exit", hi - 3.0)) + 0.5
+        ts = [max(lo, hi - 2.0), hi] if hi - lo >= 1.0 else [max(0.0, e.t - 1.0), e.t]
         if allow("MIX"):
-            probes.append(Probe("MIX", t2, _items("MIX", "desk", z.get("desk"), [t2, t2 + 2.0], "desk_what", dur),
-                                t_start=e.t, t_end=_clip(t2 + 2.0, dur), reason="смена клиентов", want=("cash",)))
+            probes.append(Probe("MIX", e.t, _items("MIX", "desk", z.get("desk"), ts, "desk_what", dur),
+                                t_start=ts[0], t_end=_clip(e.t_end if e.t_end is not None else e.t, dur),
+                                reason="смена клиентов", want=("cash",)))
+            # тот же вопрос по найденному предмету: пачка лежит до прихода следующего и после — плотная вырезка
+            # (X-38: широкая вырезка всего стола пачку 15 px не увидела, 0 «да» из 2; детектор предметов — увидел)
+            for i, (b, its) in enumerate(blob_items(blobs or [], dur)):
+                if not its or b.t_on > hi - 0.5 or b.t_off < e.t + 1.0:
+                    continue
+                at = _items(f"OBJ{i}m{k}", "desk", its[0].box, [max(b.t_on + 1.0, hi)], "desk_obj", dur)
+                probes.append(Probe("MIX", e.t, its + at, need_yes=2, want=("cash",), t_start=max(b.t_on, ts[0]),
+                                    t_end=_clip(e.t_end if e.t_end is not None else e.t, dur),
+                                    reason=f"деньги на столе с {b.t_on:.1f} с, пришёл следующий клиент"))
+
+    # 3б) Второй посетитель «через стол», пока первого ещё обслуживают (X-18; в чистом X-19 второй ждёт за
+    #     стеклом, пока первый не выйдет). Решает детектор людей, без модели: на 40 роликах событие есть только
+    #     в роликах с нарушением. Таймкод — второй дошёл до стола и остановился (X-18: появился 15.4, эталон 20).
+    for e in [e for e in ev if e.kind == "third_person" and e.meta.get("side") == "across"]:
+        if allow("QUE"):
+            t_main = _settle_time(people, e)
+            probes.append(Probe("QUE", t_main, [], t_start=e.t, t_end=_clip(e.t_end if e.t_end else t_main, dur),
+                                reason=f"второй посетитель у стола во время визита с {e.t:.1f} с", fixed=True))
 
     # 4) Клиент ушёл, кассир осталась: пересчёт без клиента (только если до ухода не считали).
     for e in [e for e in ev if e.kind == "client_leaves"]:
@@ -176,9 +270,18 @@ def plan(people: People, zones: Zones, dur: float, *, known_predicates: set[str]
         grid.append(round(dur - 1.0, 3))
     present = [t for t in grid if _present(people, t)]
     # ITEMS и FOOD читают один и тот же ответ «что лежит на столе» (общие ключи DESKp@t)
-    for check, zone, q, tag, want in (("SAFE", "safe", "safe_open", "SAFEp", ()),
-                                      ("ITEMS", "desk", "desk_what", "DESKp", ("bag",)),
-                                      ("FOOD", "desk", "desk_what", "DESKp", ("food", "drink"))):
+    sweep = [("SAFE", "safe", "safe_open", "SAFEp", ())]
+    if blobs is None:
+        sweep += [("ITEMS", "desk", "desk_what", "DESKp", ("bag",)),
+                  ("FOOD", "desk", "desk_what", "DESKp", ("food", "drink"))]
+    else:
+        # 6) Новый предмет на столе: что это — по плотной вырезке, на двух кадрах (OBJi@t общие для проверок)
+        for b, its in blob_items(blobs, dur):
+            for check, want in (("ITEMS", ("bag",)), ("FOOD", ("food", "drink"))):
+                if allow(check) and its:
+                    probes.append(Probe(check, b.t_on, its, need_yes=2, t_start=b.t_on, t_end=min(b.t_off, dur),
+                                        reason=f"новый предмет на столе {b.t_on:.1f}–{b.t_off:.1f} с", want=want))
+    for check, zone, q, tag, want in sweep:
         if not allow(check) or z.get(zone) is None:
             continue
         ts = [t for t in present if not (check == "SAFE" and _near(people, t, z.get("safe")))]
@@ -186,6 +289,23 @@ def plan(people: People, zones: Zones, dur: float, *, known_predicates: set[str]
             probes.append(Probe(check, ts[0], _items(tag, zone, z.get(zone), ts, q, dur),
                                 need_yes=2, t_start=ts[0], t_end=ts[-1], reason="обход по ролику", want=want))
     return probes
+
+
+def _settle_time(people: People, e: Event, still: float = 0.02, hold: float = 1.0) -> float:
+    """Когда трек посетителя из события перестал идти: центр рамки за hold секунд сдвинулся меньше still."""
+    tr = next((v for v in people.visitors if v.tid == e.meta.get("tid")), None)
+    if tr is None or len(tr.t) < 3:
+        return e.t
+    c = [((b[0] + b[2]) / 2, (b[1] + b[3]) / 2) for b in tr.boxes]
+    for i, t in enumerate(tr.t):
+        if t < tr.start + 1.0:
+            continue
+        j = next((k for k in range(i, len(tr.t)) if tr.t[k] >= t + hold), None)
+        if j is None:
+            break
+        if max(abs(c[k][0] - c[i][0]) + abs(c[k][1] - c[i][1]) for k in range(i, j + 1)) < still:
+            return float(t)
+    return e.t
 
 
 def _present(people: People, t: float) -> bool:
