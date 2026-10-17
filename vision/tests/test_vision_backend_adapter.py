@@ -42,7 +42,7 @@ def _respond(times, question):
 def _timeline_respond(times, question):
     # Personal items appear on the desk at the synthetic event (8–10 s).
     if any(8.0 <= t <= 10.0 for t in times):
-        return json.dumps([{"event": "items_on_desk", "t": 9.0}])
+        return json.dumps([{"event": "items_on_desk", "t": 8.5}, {"event": "items_on_desk", "t": 9.5}])
     return "[]"
 
 

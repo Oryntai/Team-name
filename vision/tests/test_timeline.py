@@ -31,6 +31,13 @@ def test_safe_open_must_persist_and_never_close():
 def test_door_left_open_vs_closed_after_entry():
     assert checks([(1, "cashier_enters"), (2, "door_open"), (10, "door_open")]) == ["DOOR"]
     assert checks([(1, "cashier_enters"), (2, "door_open"), (3, "door_closed")]) == []
+    # glass door "open" all the time and a client walking in is not the cashier leaving the door open
+    assert checks([(0.4, "door_open"), (3, "outsider_enters"), (12, "door_open")]) == []
+
+
+def test_single_mention_of_food_or_items_is_ignored():
+    assert checks([(13, "food_drink")]) == []
+    assert checks([(11, "food_drink"), (15, "food_drink")]) == ["FOOD"]
 
 
 def test_mix_and_noclient():

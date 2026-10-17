@@ -70,7 +70,8 @@ def timeline_question() -> str:
     return (
         "List every step you can clearly see in these frames. Steps:\n"
         f"{codes}\n"
-        "A state (door open, safe open, cash on desk, screen) may be reported at every frame where it is visible.\n"
+        "Report an action once, at the frame where it happens. Report a state (door open, safe open, cash on desk, "
+        "screen locked/working, items, food) at most twice per answer: the first and the last frame where it is visible.\n"
         'Return ONLY a JSON list, no prose. Each item: {"event": <one of the keys>, "t": <seconds>}. '
         "Use the given timestamps. Return [] if nothing applies."
     )
@@ -187,13 +188,13 @@ def run_checklist(steps: list[tuple[float, str]], duration: float) -> list[Viola
         t = tl.last("put_in_safe", hi=t_open + 6.0) or t_open
         out.append(_v("SAFE", t + 2.0 if t + 2.0 <= duration else t, "сейф оставлен открытым", duration))
 
-    # DOOR: дверь стоит открытой не меньше 6 с без закрытия, или через неё входит посторонний
-    t_door = tl.first("door_open")
-    if tl.by["outsider_enters"] and t_door is not None:
-        out.append(_v("DOOR", t_door, "дверь кассы открыта, входит посторонний", duration,
-                      extra=(tl.by["outsider_enters"][0],)))
-    elif t_door is not None and not tl.any("door_closed", t_door) and tl.any("door_open", t_door + 6.0):
-        out.append(_v("DOOR", t_door, "дверь кассы остаётся открытой", duration))
+    # DOOR: кассир вошла, а дверь после этого стоит открытой не меньше 6 с и не закрывается
+    t_in = tl.first("cashier_enters")
+    if t_in is not None:
+        t_door = tl.first("door_open", t_in - 1.0)
+        if t_door is not None and not tl.any("door_closed", t_in - 1.0) and tl.any("door_open", t_door + 6.0):
+            extra = tuple(tl.by["outsider_enters"][:1])
+            out.append(_v("DOOR", max(t_in, t_door), "кассир вошла и не закрыла дверь кассы", duration, extra=extra))
 
     # NOCLIENT: клиент ушёл, а его деньги пересчитываются после ухода
     for t0 in tl.by["cash_given_by_client"]:
@@ -207,9 +208,10 @@ def run_checklist(steps: list[tuple[float, str]], duration: float) -> list[Viola
             break
 
     # ITEMS / FOOD
-    if tl.by["items_on_desk"]:
+    # ITEMS / FOOD: состояние должно быть замечено минимум дважды (разовые упоминания — частая галлюцинация)
+    if len(set(tl.by["items_on_desk"])) >= 2:
         out.append(_v("ITEMS", tl.by["items_on_desk"][0], "личные вещи на кассовом столе", duration))
-    if tl.by["food_drink"]:
+    if len(set(tl.by["food_drink"])) >= 2:
         out.append(_v("FOOD", tl.by["food_drink"][0], "еда или напитки на рабочем месте", duration))
 
     # AUTH: ручной пересчёт без машины и без детектора за всё видео, без клиента
