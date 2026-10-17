@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#101319">
+    <meta name="description" content="Рабочее место проверки кассовых операций по видеозаписи.">
+    <title>Forte · Рабочее место проверки</title>
+    <link rel="stylesheet" href="./styles.css">
+    <script src="./app.js" defer></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside id="app-sidebar" class="app-sidebar" aria-label="Боковая панель">
+        <div class="sidebar-top">
+          <a class="sidebar-brand" href="/" aria-label="ForteBank, рабочее место">
+            <span class="brand-mark" aria-hidden="true">F</span>
+            <span class="brand-copy"><strong>ForteBank</strong><span>Видеоконтроль</span></span>
+          </a>
+          <button id="sidebar-close" class="sidebar-close icon-button" type="button" aria-label="Закрыть меню">×</button>
+        </div>
+
+        <div class="workspace-switcher">
+          <span class="sidebar-label">РАБОЧАЯ ОБЛАСТЬ</span>
+          <div class="workspace-card">
+            <span class="workspace-avatar" aria-hidden="true">F</span>
+            <span class="workspace-copy"><strong>Forte / Доказательства</strong><span>Внутренняя проверка</span></span>
+            <span class="workspace-chevron" aria-hidden="true">⌄</span>
+          </div>
+        </div>
+
+        <nav class="primary-nav" aria-label="Разделы">
+          <span class="sidebar-label">РАБОЧИЕ ИНСТРУМЕНТЫ</span>
+          <button class="nav-item is-active" type="button" data-view="upload" aria-current="page">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18.5z"/><path d="m10 8 6 4-6 4z"/></svg>
+            <span>Проверка видео</span>
+          </button>
+          <button id="nav-results" class="nav-item" type="button" data-view="result" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
+            <span>Результаты</span><span class="nav-count" id="nav-result-count"></span>
+          </button>
+          <button id="nav-rules" class="nav-item" type="button" data-view="rules" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5h9l4 4V20H6z"/><path d="M14 4v5h5M9 13h7M9 16h7"/></svg>
+            <span>Основания</span>
+          </button>
+          <button class="nav-item" type="button" data-view="help">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M9.8 9a2.3 2.3 0 1 1 3.8 1.7c-1 .8-1.6 1.2-1.6 2.5M12 16.8v.1"/></svg>
+            <span>Как это работает</span>
+          </button>
+        </nav>
+
+        <section id="sidebar-session" class="sidebar-session" aria-labelledby="events-title" hidden>
+          <div class="sidebar-session-heading">
+            <div><span class="sidebar-label">ТЕКУЩАЯ ЗАПИСЬ</span><p id="result-file-name" class="result-file-name"></p></div>
+          </div>
+          <h2 id="events-title" class="events-title">Эпизоды</h2>
+          <nav id="event-list" class="event-list" aria-label="Найденные эпизоды"></nav>
+          <p class="rail-note">Сопоставьте момент события с соседними кадрами.</p>
+        </section>
+
+        <div class="sidebar-footer">
+          <span class="service-indicator" aria-hidden="true"></span>
+          <span><strong>Сервис проверки</strong><small>Подключение к рабочему API</small></span>
+          <span class="service-menu" aria-hidden="true">···</span>
+        </div>
+      </aside>
+
+      <button id="sidebar-backdrop" class="sidebar-backdrop" type="button" aria-label="Закрыть меню" hidden></button>
+
+      <div class="workspace">
+        <header class="workspace-topbar">
+          <button id="sidebar-toggle" class="sidebar-toggle icon-button" type="button" aria-label="Открыть меню" aria-controls="app-sidebar" aria-expanded="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+          </button>
+          <div class="breadcrumbs" aria-label="Расположение">
+            <span>ForteBank</span><span class="breadcrumb-separator" aria-hidden="true">/</span><strong id="active-section-name">Проверка видео</strong>
+          </div>
+          <span class="topbar-state"><span aria-hidden="true"></span>Пилотная версия</span>
+          <button id="new-check" class="button button-primary new-check-button" type="button" hidden>Проверить другое видео</button>
+        </header>
+
+        <main class="workspace-main">
+          <section id="upload-view" class="view upload-view" aria-labelledby="page-title">
+            <div class="view-heading">
+              <div>
+                <p class="eyebrow">РАБОЧАЯ ОБЛАСТЬ</p>
+                <h1 id="page-title" tabindex="-1">Проверка кассовой операции</h1>
+                <p class="intro-copy">Загрузите видеозапись, чтобы найти эпизоды и проверить подтверждающие кадры.</p>
+              </div>
+              <span class="privacy-chip"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 5 6v5c0 4.6 2.8 8.1 7 10 4.2-1.9 7-5.4 7-10V6z"/><path d="m9 12 2 2 4-4"/></svg>Локальная обработка</span>
+            </div>
+
+            <div class="upload-workspace">
+              <form id="upload-form" class="upload-card" novalidate>
+                <div class="tool-card-heading">
+                  <div class="tool-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 6.5A1.5 1.5 0 0 1 5.5 5h9A1.5 1.5 0 0 1 16 6.5v11a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 4 17.5z"/><path d="m16 9 4-2v10l-4-2"/></svg></div>
+                  <div><h2>Новая проверка</h2><p>Загрузите видео с кассовой операцией</p></div>
+                </div>
+                <div id="drop-area" class="drop-area">
+                  <div class="upload-icon" aria-hidden="true"><span>↑</span></div>
+                  <h3>Перетащите видео сюда</h3>
+                  <p>или выберите файл на устройстве</p>
+                  <label for="video-file" class="button button-secondary file-picker">Выбрать файл</label>
+                  <input id="video-file" class="visually-hidden" name="file" type="file" accept=".mov,video/quicktime" aria-describedby="file-requirements file-error">
+                  <p id="file-requirements" class="file-requirements">MOV · до 64 МиБ · видео не покидает контур сервиса</p>
+                </div>
+                <div id="selected-file" class="selected-file" aria-live="polite" hidden>
+                  <span class="file-mark" aria-hidden="true">MOV</span>
+                  <div class="selected-file-copy"><strong id="file-name"></strong><span id="file-size"></span></div>
+                  <button id="remove-file" class="icon-button" type="button" aria-label="Убрать выбранный файл">×</button>
+                </div>
+                <p id="file-error" class="form-message error-text" role="alert" hidden></p>
+                <div class="upload-actions"><p class="privacy-note">При сбое система не считает видео проверенным.</p><button id="start-button" class="button button-primary start-button" type="submit" disabled>Начать проверку <span aria-hidden="true">→</span></button></div>
+              </form>
+
+              <aside class="workflow-card" aria-labelledby="workflow-title">
+                <p class="eyebrow">ПОРЯДОК РАБОТЫ</p>
+                <h2 id="workflow-title">От видео до проверки</h2>
+                <ol class="workflow-steps">
+                  <li><span class="step-number">01</span><span><strong>Загрузите запись</strong><small>Выберите MOV-файл в пределах допустимого размера.</small></span></li>
+                  <li><span class="step-number">02</span><span><strong>Дождитесь анализа</strong><small>Сервис отметит моменты, которые стоит проверить.</small></span></li>
+                  <li><span class="step-number">03</span><span><strong>Сверьте доказательства</strong><small>Посмотрите кадры и нормативное основание каждого эпизода.</small></span></li>
+                </ol>
+                <div class="workflow-note"><span class="note-icon" aria-hidden="true">i</span><p>Автоматическая отметка — повод для проверки. Окончательное решение принимает специалист.</p></div>
+              </aside>
+            </div>
+          </section>
+
+          <section id="processing-view" class="view status-view" aria-labelledby="processing-title" aria-live="polite" hidden>
+            <div class="status-card">
+              <div class="spinner" aria-hidden="true"></div>
+              <p class="eyebrow">ЗАПИСЬ ПРИНЯТА</p>
+              <h1 id="processing-title" tabindex="-1">Проверяем видео</h1>
+              <p class="status-copy">Обработка может занять несколько минут. Оставьте страницу открытой — результат появится здесь.</p>
+              <p id="processing-file" class="processing-file"></p>
+              <div class="processing-steps" aria-hidden="true"><span class="is-current">Загрузка</span><span>Анализ</span><span>Результат</span></div>
+              <p id="job-reference" class="job-reference" hidden></p>
+              <p id="connection-note" class="connection-note" role="status" hidden></p>
+            </div>
+          </section>
+
+          <section id="result-view" class="view result-view" aria-labelledby="result-title" hidden>
+            <div class="result-heading-row">
+              <div><p class="eyebrow">РЕЗУЛЬТАТ ПРОВЕРКИ</p><h1 id="result-title" tabindex="-1">Разбор эпизодов</h1><p id="result-summary" class="result-summary"></p></div>
+              <span id="verdict-badge" class="verdict-badge"></span>
+            </div>
+            <div id="result-note" class="result-note"><span class="note-dot" aria-hidden="true"></span>Автоматическая оценка предварительная · сверьте каждый эпизод и основание</div>
+
+            <div id="events-layout" class="review-workspace" hidden>
+              <article class="evidence-main" aria-labelledby="selected-event-title">
+                <div class="evidence-heading">
+                  <div><span class="event-status">Возможное нарушение</span><h2 id="selected-event-title" tabindex="-1" aria-live="polite"></h2></div>
+                  <div class="event-meta"><span id="selected-event-time" class="time-chip"></span><span id="frame-count" class="frame-count"></span></div>
+                </div>
+                <div class="evidence-grid-heading"><div><h3>Кадры эпизода</h3><p>Сверьте момент события с контекстом до и после.</p></div><span class="frame-count-label">ДОКАЗАТЕЛЬСТВА</span></div>
+                <div id="evidence-grid" class="evidence-grid"></div>
+                <div class="support-grid">
+                  <section class="info-card" aria-labelledby="description-title">
+                    <h3 id="description-title">Наблюдаемое действие</h3>
+                    <p id="observation-copy"></p>
+                  </section>
+                  <section class="info-card" aria-labelledby="basis-title">
+                    <h3 id="basis-title">Основание</h3>
+                    <p id="basis-copy"></p>
+                    <div id="source-link-wrap" class="source-link-wrap" hidden><a id="source-link" target="_blank" rel="noopener noreferrer">Прочитать правило <span aria-hidden="true">↗</span></a></div>
+                  </section>
+                </div>
+                <p class="review-note">Результат основан на визуально наблюдаемых признаках. Окончательную оценку даёт проверяющий.</p>
+              </article>
+            </div>
+
+            <div id="empty-result" class="empty-result" hidden>
+              <span class="empty-symbol" aria-hidden="true">✓</span>
+              <div><h2 tabindex="-1">В этой записи признаки нарушений не обнаружены</h2><p>Вывод относится только к обработанному видео.</p></div>
+            </div>
+          </section>
+
+          <section id="rules-view" class="view information-view" aria-labelledby="rules-title" hidden>
+            <div class="view-heading"><div><p class="eyebrow">ИСТОЧНИКИ</p><h1 id="rules-title" tabindex="-1">Нормативные основания</h1><p class="intro-copy">Ссылки и пункты, указанные в результатах последней проверки.</p></div></div>
+            <div id="rules-list" class="rules-list"></div>
+          </section>
+
+          <section id="help-view" class="view information-view" aria-labelledby="help-title" hidden>
+            <div class="view-heading"><div><p class="eyebrow">СПРАВКА</p><h1 id="help-title" tabindex="-1">Как проходит проверка</h1><p class="intro-copy">Интерфейс помогает просмотреть отмеченные эпизоды и собрать контекст для специалиста.</p></div></div>
+            <div class="help-grid">
+              <article class="help-card"><span class="help-card-index">01</span><h2>Загрузите видео</h2><p>Сейчас форма принимает MOV-файлы размером до 64 МиБ. Сервер повторно проверяет формат и размер.</p></article>
+              <article class="help-card"><span class="help-card-index">02</span><h2>Откройте эпизод</h2><p>Выберите отметку в боковой панели. Система покажет кадры около события и его описание.</p></article>
+              <article class="help-card"><span class="help-card-index">03</span><h2>Сверьте основание</h2><p>Проверьте нормативную ссылку и контекст кадров. Автоматическая отметка сама по себе не является окончательным решением.</p></article>
+            </div>
+          </section>
+
+          <section id="failure-view" class="view status-view" aria-labelledby="failure-title" hidden>
+            <div class="status-card failure-card">
+              <span class="failure-symbol" aria-hidden="true">!</span>
+              <p class="eyebrow">РЕЗУЛЬТАТ НЕ ПОЛУЧЕН</p>
+              <h1 id="failure-title" tabindex="-1">Проверку не удалось завершить</h1>
+              <p id="failure-copy" class="status-copy"></p>
+              <p class="failure-caveat">По незавершённой проверке нельзя сделать вывод об отсутствии нарушений.</p>
+              <button id="resume-check" class="button button-secondary resume-check" type="button" hidden>Продолжить проверку</button>
+              <button id="failure-new-check" class="button button-primary" type="button">Выбрать другое видео</button>
+            </div>
+          </section>
+
+          <footer class="workspace-footer"><span>ForteBank · Видеоконтроль</span><span>Пилотная версия · анализ требует проверки специалистом</span></footer>
+        </main>
+      </div>
+    </div>
+
+    <dialog id="image-dialog" class="image-dialog" aria-labelledby="dialog-caption">
+      <div class="dialog-toolbar"><p id="dialog-caption"></p><button id="close-dialog" class="icon-button" type="button" aria-label="Закрыть увеличенный кадр">×</button></div>
+      <img id="dialog-image" alt="Увеличенный кадр-доказательство">
+    </dialog>
+  </body>
+</html>
