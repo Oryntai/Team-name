@@ -287,3 +287,30 @@ def test_service_rejects_profiles_without_catalog_coverage(monkeypatch):
     monkeypatch.delenv("FORTE_VISION_PROFILE")
     assert backend_adapter._service_profile("legacy_full") == "fast"
     assert backend_adapter._service_profile("full") == "full"
+
+
+def test_vlm_error_on_one_window_leaves_a_gap_not_a_crash(synthetic_video):
+    """Tunnel drop on one timeline window: that window is uncovered, the violation found elsewhere stays."""
+    from forte_vision.observer import analyze_video
+
+    def respond(times, question):
+        if question.startswith("List every step") and max(times) < 7.0:  # first of three windows
+            raise ConnectionResetError("tunnel down")
+        return _timeline_respond(times, question)
+
+    obs, diag = analyze_video(synthetic_video, StubBackend(respond), video_id="gap", profile="fast")
+    assert diag["timeline_vlm_errors"] == 1
+    assert obs["analysis_status"] == "partial" and not obs["coverage_complete"]
+    assert any(c["predicates"]["personal_items_on_desk"] == "observed" for c in obs["candidates"])
+
+
+def test_timeline_windows_shrink_to_fit_a_slow_model(synthetic_video):
+    """A slow model server (or a jury queue) gets fewer, wider windows with full coverage, not a partial result."""
+    from forte_vision.observer import analyze_video
+
+    backend = StubBackend(_timeline_respond)
+    backend.stats.calls, backend.stats.wall_sec = 10, 400.0  # 40 s per call measured so far
+    obs, diag = analyze_video(synthetic_video, backend, video_id="slow", profile="fast", deadline_sec=150)
+    assert diag["timeline_windows"] == 2 and diag["timeline_call_estimate_sec"] == 50.0
+    assert obs["coverage_complete"]
+

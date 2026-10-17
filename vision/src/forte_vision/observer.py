@@ -22,7 +22,7 @@ import numpy as np
 from . import motion, predicates, scene, timeline
 from .contract import validate_observation
 from .video import EVIDENCE_SOURCE, PyAVSource, frame_id
-from .vlm import VLMBackend
+from .vlm import VLMBackend, expected_call_sec, start_job
 from .audit import save_audit
 
 
@@ -186,6 +186,7 @@ def analyze_video(
     prof = PROFILES[profile] if isinstance(profile, str) else profile
     t_start = time.monotonic()
     deadline = t_start + deadline_sec
+    start_job(backend, deadline)  # таймаут каждого вызова VLM не длиннее остатка бюджета задания
     timings: dict[str, float] = {}
     vid = video_id or path.rsplit("/", 1)[-1].rsplit(".", 1)[0]
 
@@ -418,6 +419,10 @@ def _fit_size(width: int, height: int, max_side: int) -> tuple[int, int] | None:
     return max(1, round(width * scale)), max(1, round(height * scale))
 
 
+TIMELINE_BUDGET_SHARE = 0.6  # доля бюджета задания на проход таймлайна
+TIMELINE_MAX_TOKENS = 400
+
+
 def _timeline_windows(dur: float, prof: Profile) -> list[tuple[float, float]]:
     win = max(prof.timeline_min_window_sec, dur / max(1, prof.timeline_max_windows))
     n = max(1, math.ceil(dur / win - 1e-9))
@@ -429,14 +434,21 @@ def _analyze_timeline(vid, src, info, backend, prof, deadline, timings, t_start,
     dur = info.duration_sec
     t0 = time.monotonic()
     windows = _timeline_windows(dur, prof)
+    # Окон столько, сколько успеем: при очереди жюри или медленном сервере модели окна шире,
+    # но покрытие полное. Остальное время — перепроверке, правилам и JPEG.
+    call_sec = expected_call_sec(backend)
+    fit = max(2, int(TIMELINE_BUDGET_SHARE * (deadline - time.monotonic()) // call_sec))
+    if len(windows) > fit:
+        windows = _timeline_windows(dur, replace(prof, timeline_max_windows=fit))
     question = timeline.timeline_question()
     vlm_size = _fit_size(info.width, info.height, prof.timeline_max_side)
     steps: list[tuple[float, str]] = []
     pts_pool: list[float] = []
-    gaps: list[tuple[float, float]] = []  # окна без валидного ответа (битый ответ, нет кадров, дедлайн)
-    covered = invalid = dropped = 0
+    gaps: list[tuple[float, float]] = []  # окна без валидного ответа (битый ответ, нет кадров, сбой VLM, дедлайн)
+    covered = invalid = dropped = errors = 0
     for ws, we in windows:
-        if time.monotonic() > deadline:
+        # вызов, который не успеет до дедлайна, не начинаем: он съест резерв и убьёт всё задание
+        if time.monotonic() + expected_call_sec(backend) > deadline:
             gaps.append((ws, we))
             continue
         times = [ws + (k + 0.5) * (we - ws) / prof.timeline_frames for k in range(prof.timeline_frames)]
@@ -447,7 +459,12 @@ def _analyze_timeline(vid, src, info, backend, prof, deadline, timings, t_start,
             gaps.append((ws, we))
             continue
         pts_pool.extend(t for t, _ in frames)
-        ans = backend.ask(frames, question, max_tokens=400)
+        try:
+            ans = backend.ask(frames, question, max_tokens=TIMELINE_MAX_TOKENS)
+        except Exception:  # обрыв туннеля, таймаут, ошибка сервера: окно не покрыто, задание живо
+            errors += 1
+            gaps.append((ws, we))
+            continue
         parsed, ok, n_dropped = timeline.parse_timeline(ans.text, ws, we)
         dropped += n_dropped
         if not ok:
@@ -486,12 +503,15 @@ def _analyze_timeline(vid, src, info, backend, prof, deadline, timings, t_start,
                 frames, cropped = _crop_frames(frames, boxes)
             if not cropped and vlm_size is not None:
                 frames = [(t, im.resize(vlm_size)) for t, im in frames]
-        text = backend.ask(frames, timeline.verify_question(check), max_tokens=8).text
+        try:
+            text = backend.ask(frames, timeline.verify_question(check), max_tokens=8).text
+        except Exception:  # сбой VLM: «не смогли решить» — подтверждение оставляет нарушение, recall не добавляет
+            return "unclear", cropped
         return timeline.parse_verdict(text), cropped
 
     verdicts, kept = [], []
     for v in violations:
-        if time.monotonic() > deadline:
+        if time.monotonic() + expected_call_sec(backend) > deadline:
             kept.append(v)  # не успели проверить — оставляем как есть, пропуск хуже ложной тревоги
             verdicts.append({"check": v.check, "answer": "not_run", "mode": "confirm"})
             continue
@@ -502,7 +522,7 @@ def _analyze_timeline(vid, src, info, backend, prof, deadline, timings, t_start,
     rejected = [v for v in violations if all(v is not k for k in kept)]
     recovered = []
     for check, t_main in timeline.recall_triggers(steps, {v.check for v in violations}):
-        if time.monotonic() > deadline:
+        if time.monotonic() + expected_call_sec(backend) > deadline:
             break
         answer, cropped = verify_at(check, t_main)
         verdicts.append({"check": check, "answer": answer, "mode": "recall", "cropped": cropped})
@@ -553,8 +573,10 @@ def _analyze_timeline(vid, src, info, backend, prof, deadline, timings, t_start,
         "vlm": asdict(backend.stats),
         "vlm_routing": dict(getattr(backend, "routing", {}) or {}),
         "timeline_windows": len(windows),
+        "timeline_call_estimate_sec": round(call_sec, 2),
         "timeline_covered_windows": covered,
         "timeline_invalid_windows": invalid,
+        "timeline_vlm_errors": errors,
         "timeline_gaps": [[round(a, 3), round(b, 3)] for a, b in gaps],
         "timeline_dropped_items": dropped,
         "timeline_steps": [[round(t, 2), e] for t, e in sorted(steps)],

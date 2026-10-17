@@ -201,6 +201,9 @@ class VisionAnalyzer:
 
         prof = _service_profile(context.profile)
         budget = context.deadline_at - time.time() - self.reserve
+        # доля времени при очереди заданий жюри (worker делит время до последнего дедлайна)
+        if getattr(context, "analysis_budget_sec", None) is not None:
+            budget = min(budget, context.analysis_budget_sec)
         if budget <= 0:
             raise IncompleteAnalysis("no time left for analysis before the deadline")
         src = VideoIOSource(video, context.video_path)

@@ -19,6 +19,20 @@
       "default": "standard",
       "title": "Profile",
       "type": "string"
+    },
+    "analysis_budget_sec": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Seconds the analyzer may spend when other jobs are queued; None means up to deadline_at",
+      "title": "Analysis Budget Sec"
     }
   },
   "required": [

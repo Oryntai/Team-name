@@ -141,6 +141,13 @@ class SyntheticAnalyzer:
             os._exit(31)
         if context.profile == "incomplete":
             return ObservationBatch(complete=False, events=[], diagnostics={"frames_seen": 3})
+        if context.profile == "partial":
+            pts = video.validate().frame_pts
+            return ObservationBatch(complete=False, diagnostics={"frames_seen": 3}, events=[
+                ObservedEvent(t_start=pts[0], t_end=pts[2], t_main=pts[1], frame_pts=list(pts[:3]),
+                              observations={"synthetic": "observed"}, sources=["detector"])])
+        if context.profile == "budget":
+            return ObservationBatch(complete=True, events=[], diagnostics={"budget": context.analysis_budget_sec})
         if context.profile == "clean":
             return ObservationBatch(complete=True, events=[], diagnostics={"sampled_frames": 5, "synthetic_fixture": True})
         pts = video.validate().frame_pts
@@ -400,3 +407,37 @@ def test_group_permission_failure_only_tolerated_for_dead_macos_model(
         assert supervisor.model_ready is False
     else:
         assert not process.closed and not connection.closed
+
+
+def test_partial_analysis_keeps_the_violation_it_already_found(worker_settings, synthetic_video):
+    """FAQ 11: a violation found on the analysed part is reported; the rest of the video is unchecked."""
+    with Supervisor(worker_settings) as supervisor:
+        _enqueue(supervisor.store, "partial", synthetic_video, profile="partial")
+        [job] = _drain(supervisor, ["partial"])
+        assert job["status"] == "done", job
+        assert job["result"]["verdict"] == "violation"
+        [violation] = job["result"]["violations"]
+        observation, basis = violation["description"].split("Нормативное основание:")
+        assert "Анализ завершён не по всему видео" in observation
+        assert basis.strip().endswith("https://example.com/synthetic-test-only")
+        assert job["diagnostics"]["partial_result"] is True
+
+
+def test_queue_budget_shares_time_to_the_last_deadline():
+    from backend.worker import _queue_budget
+    assert _queue_budget(300.0, [], 0.0) is None
+    # five jury uploads at once: (300 - 20) / 5 - 8
+    assert _queue_budget(300.0, [300.0] * 4, 0.0) == 48.0
+    assert _queue_budget(300.0, [300.0] * 20, 0.0) == 30.0  # floor, the analyzer still caps at its deadline
+
+
+def test_jury_burst_gets_shared_budgets_and_the_last_job_the_rest(worker_settings, synthetic_video):
+    with Supervisor(worker_settings) as supervisor:
+        for name in ("burst-1", "burst-2", "burst-3"):
+            _enqueue(supervisor.store, name, synthetic_video, profile="budget")
+        results = _drain(supervisor, ["burst-1", "burst-2", "burst-3"])
+        budgets = [job["diagnostics"]["budget"] for job in results]
+        assert all(job["status"] == "done" for job in results)
+        assert 30.0 <= budgets[0] < 100 and 30.0 <= budgets[1] < 150
+        assert budgets[2] is None
+

@@ -65,6 +65,9 @@ class AnalysisContext(StrictModel):
     video_path: Path
     deadline_at: float = Field(allow_inf_nan=False, description="Absolute UTC Unix seconds, including upload and queue time")
     profile: str = "standard"
+    analysis_budget_sec: float | None = Field(
+        default=None, gt=0, allow_inf_nan=False,
+        description="Seconds the analyzer may spend when other jobs are queued; None means up to deadline_at")
 
 
 class EventSpan(StrictModel):

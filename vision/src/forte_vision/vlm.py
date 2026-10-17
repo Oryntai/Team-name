@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import http.client
+import math
 import os
 import tempfile
 import time
@@ -15,6 +16,10 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from PIL import Image
+
+MIN_CALL_SEC = 3.0  # меньше этого остатка бюджета вызов VLM не начинаем
+DEFAULT_CALL_SEC = 12.0  # оценка одного вызова, пока у бэкенда нет своей статистики
+FALLBACK_CALL_SEC = 30.0  # то же для запасной MLX на маке (M1 Pro, Qwen3-VL-8B 4bit)
 
 
 @dataclass
@@ -151,7 +156,35 @@ class OpenAICompatBackend:
         self.base_url = base_url.rstrip("/")
         self.model_id, self.revision = model_id, "server"
         self.api_key, self.timeout = api_key, timeout
+        self.deadline: float | None = None  # time.monotonic() конца бюджета задания; ставит start_job
         self.stats = VLMStats()
+
+    def _opener(self):
+        import urllib.request
+
+        # прокси окружения не используем: кадры не должны уходить никуда, кроме указанного локального сервера
+        return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+    def _call_timeout(self) -> float:
+        if self.deadline is None:
+            return self.timeout
+        left = self.deadline - time.monotonic()
+        if left < MIN_CALL_SEC:
+            raise TimeoutError("no time left in the job budget for a VLM call")
+        return min(self.timeout, left)
+
+    def healthy(self, timeout: float = 2.0) -> bool:
+        """Быстрая проверка сервера модели перед заданием (llama-server и vLLM отдают GET /health)."""
+        import urllib.request
+
+        req = urllib.request.Request(self.base_url + "/health", method="GET")
+        if self.api_key:
+            req.add_header("Authorization", "Bearer " + self.api_key)
+        try:
+            with self._opener().open(req, timeout=timeout) as r:
+                return r.status == 200
+        except (OSError, http.client.HTTPException, ValueError):
+            return False
 
     def ask(self, frames, question, max_tokens=128):
         import base64
@@ -172,10 +205,9 @@ class OpenAICompatBackend:
                                      headers={"Content-Type": "application/json"})
         if self.api_key:
             req.add_header("Authorization", "Bearer " + self.api_key)
+        timeout = self._call_timeout()
         t0 = time.perf_counter()
-        # прокси окружения не используем: кадры не должны уходить никуда, кроме указанного локального сервера
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        with opener.open(req, timeout=self.timeout) as r:
+        with self._opener().open(req, timeout=timeout) as r:
             data = _json.loads(r.read())
         usage = data.get("usage") or {}
         a = VLMAnswer(data["choices"][0]["message"]["content"].strip(), int(usage.get("prompt_tokens", 0)),
@@ -204,6 +236,8 @@ class FallbackBackend:
 
     Сбой связи или кривой ответ основного — запрос сразу уходит запасному, а основной не
     трогаем cooldown_sec секунд, чтобы не терять время на каждом окне. Потом пробуем снова.
+    Внутри задания (begin_job) сбой основного держит запасной до конца задания: зависший сервер
+    иначе съедал бы полный таймаут на каждом окне. Перед заданием основной проверяется GET /health.
     """
 
     _FAILURES = (OSError, http.client.HTTPException, ValueError, KeyError, IndexError)
@@ -213,27 +247,70 @@ class FallbackBackend:
         self.primary, self.secondary = primary, secondary
         self.cooldown_sec, self.clock = cooldown_sec, clock
         self.down_until = 0.0
+        self.in_job = False
+        self.deadline: float | None = None
         self.model_id = f"{primary.model_id}|fallback:{secondary.model_id}"
         self.revision = f"{primary.revision}|{secondary.revision}"
         self.stats = VLMStats()
-        self.routing = {"primary_calls": 0, "fallback_calls": 0, "primary_failures": 0}
+        self.routing = {"primary_calls": 0, "fallback_calls": 0, "primary_failures": 0, "primary_unhealthy": 0}
+
+    def begin_job(self, deadline: float | None) -> None:
+        self.in_job, self.deadline = True, deadline
+        if hasattr(self.primary, "deadline"):
+            self.primary.deadline = deadline
+        healthy = getattr(self.primary, "healthy", None)
+        if healthy is not None and not healthy():
+            self.routing["primary_unhealthy"] += 1
+            self.down_until = math.inf
+        else:
+            self.down_until = 0.0
+
+    @property
+    def primary_down(self) -> bool:
+        return self.clock() < self.down_until
 
     def ask(self, frames, question, max_tokens=128):
-        if self.clock() >= self.down_until:
+        if not self.primary_down:
             try:
                 a = self.primary.ask(frames, question, max_tokens)
             except self._FAILURES:
                 self.routing["primary_failures"] += 1
-                self.down_until = self.clock() + self.cooldown_sec
+                self.down_until = math.inf if self.in_job else self.clock() + self.cooldown_sec
             else:
                 self.routing["primary_calls"] += 1
                 self.stats.add(a)
                 return a
+            if self.deadline is not None and self.deadline - time.monotonic() < MIN_CALL_SEC:
+                raise TimeoutError("no time left in the job budget for the fallback VLM")
         a = self.secondary.ask(frames, question, max_tokens)
         self.routing["fallback_calls"] += 1
         self.stats.add(a)
         return a
 
+
+
+def start_job(backend, deadline: float | None) -> None:
+    """Начало задания: бюджет для таймаутов вызовов и, у FallbackBackend, health основного сервера."""
+    begin = getattr(backend, "begin_job", None)
+    if begin is not None:
+        begin(deadline)
+    elif hasattr(backend, "deadline"):
+        backend.deadline = deadline
+
+
+def expected_call_sec(backend) -> float:
+    """Оценка одного вызова для планирования окон: средняя по бэкенду, который сейчас отвечает."""
+    default = DEFAULT_CALL_SEC
+    if isinstance(backend, FallbackBackend):
+        if backend.primary_down:
+            backend, default = backend.secondary, FALLBACK_CALL_SEC
+        else:
+            backend = backend.primary
+    stats = getattr(backend, "stats", None)
+    if stats is None or stats.calls < 3 or stats.wall_sec <= 0:
+        return default
+    # среднее смешивает дешёвые вызовы перепроверки и дорогие окна таймлайна — берём с запасом
+    return max(4.0, 1.25 * stats.wall_sec / stats.calls)
 
 def _openai_from_env(model_id: str | None) -> OpenAICompatBackend:
     # FORTE_VLM_URL — адрес локального сервера; ключ — из файла FORTE_VLM_KEY_FILE (не из аргументов)

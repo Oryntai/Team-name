@@ -155,6 +155,22 @@ def _require_time(deadline_at: float) -> None:
         raise TimeoutError("Job deadline exceeded")
 
 
+# A jury burst arrives at once and every deadline counts from upload, so one sequential worker
+# would spend the whole window on the first video and let the tail expire. Each claimed job gets
+# its share of the time left to the last queued deadline; the analyzer then plans fewer, wider windows.
+QUEUE_TAIL_RESERVE_SEC = 20.0  # the last job's analyzer keeps this much for rules and JPEG
+QUEUE_JOB_OVERHEAD_SEC = 8.0   # decoding probe, rules and evidence JPEG outside the analysis budget
+QUEUE_MIN_BUDGET_SEC = 30.0
+
+
+def _queue_budget(deadline_at: float, queued_deadlines: list[float], now: float) -> float | None:
+    if not queued_deadlines:
+        return None
+    share = ((max(queued_deadlines) - now - QUEUE_TAIL_RESERVE_SEC) / (len(queued_deadlines) + 1)
+             - QUEUE_JOB_OVERHEAD_SEC)
+    return max(QUEUE_MIN_BUDGET_SEC, min(deadline_at - now, share))
+
+
 def _require_frame_pts(pts: float, available: tuple[float, ...]) -> None:
     index = bisect.bisect_left(available, pts)
     candidates = available[max(0, index - 1):index + 1]
@@ -167,7 +183,8 @@ def _analyze_job(job: dict, config: dict, analyzer: Any, rules: Any,
     from backend.video_io import VideoIO
 
     context = AnalysisContext(job_id=job["job_id"], video_path=job["video_path"],
-                              deadline_at=job["deadline_at"], profile=job["profile"])
+                              deadline_at=job["deadline_at"], profile=job["profile"],
+                              analysis_budget_sec=job.get("analysis_budget_sec"))
     _require_time(context.deadline_at)
     video = VideoIO(context.video_path, ffmpeg_bin=config["ffmpeg_bin"],
                     ffprobe_bin=config["ffprobe_bin"], deadline_at=context.deadline_at)
@@ -176,8 +193,6 @@ def _analyze_job(job: dict, config: dict, analyzer: Any, rules: Any,
     if diagnostics is not None:
         diagnostics.update(batch.diagnostics)
     _require_time(context.deadline_at)
-    if not batch.complete:
-        raise IncompleteAnalysis("Analysis coverage incomplete")
     for observed in batch.events:
         if observed.t_end > metadata.duration_sec + 1e-6:
             raise ValueError("Observed event extends beyond video duration")
@@ -188,6 +203,14 @@ def _analyze_job(job: dict, config: dict, analyzer: Any, rules: Any,
     evaluated = rules.evaluate(batch, context)
     if not isinstance(evaluated, list):
         raise ValueError("Rules must return a list of RuleEvent")
+    # Partial coverage keeps the violations already proven on the analysed part (FAQ 11), but an
+    # incomplete analysis without any of them stays failed: it is never reported as no_violation.
+    if not batch.complete and not evaluated:
+        raise IncompleteAnalysis("Analysis coverage incomplete")
+    partial_note = (" Анализ завершён не по всему видео: нарушение найдено на проверенной части, "
+                    "остальные фрагменты не проверены." if not batch.complete else "")
+    if diagnostics is not None and not batch.complete:
+        diagnostics["partial_result"] = True
     violations = []
     for item in evaluated:
         _require_time(context.deadline_at)
@@ -209,7 +232,8 @@ def _analyze_job(job: dict, config: dict, analyzer: Any, rules: Any,
             frames.append(EvidenceFrame(timestamp_sec=frame.timestamp_sec,
                                         image_base64=base64.b64encode(frame.jpeg_bytes).decode("ascii")))
         main = min(frames, key=lambda frame: abs(frame.timestamp_sec - event.t_main)).timestamp_sec
-        description = (f"{event.description}\n"
+        # The note stays in the observation part: the UI parses everything after the basis marker.
+        description = (f"{event.description}{partial_note}\n"
                        f"Нормативное основание: {event.rule_title}; "
                        f"{event.rule_section} (ID: {event.rule_id}). {event.rule_url}")
         violations.append(Violation(type=event.type, timecode_sec=main,
@@ -449,6 +473,8 @@ class Supervisor:
                 self._stop_model()
             job = self.store.claim()
             if job is not None:
+                job["analysis_budget_sec"] = _queue_budget(job["deadline_at"], self.store.queued_deadlines(),
+                                                           time.time())
                 self.active = job
                 try:
                     if self.process is None:

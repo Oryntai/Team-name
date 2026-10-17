@@ -24,6 +24,11 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(out)
 
+    def do_GET(self):
+        self.send_response(200 if self.path == "/health" else 404)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def log_message(self, *args):
         pass
 
@@ -103,7 +108,7 @@ def test_fallback_switches_and_retries_after_cooldown():
     assert b.ask(frames, "q").text == "mac" and calls["n"] == 1  # в cooldown основной не дёргаем
     now[0] = 61.0
     assert b.ask(frames, "q").text == "gpu"  # после cooldown основной снова в деле
-    assert b.routing == {"primary_calls": 1, "fallback_calls": 2, "primary_failures": 1}
+    assert b.routing == {"primary_calls": 1, "fallback_calls": 2, "primary_failures": 1, "primary_unhealthy": 0}
     assert b.stats.calls == 3 and "fallback:mlx" in b.model_id
 
 
@@ -121,3 +126,94 @@ def test_fallback_on_dead_local_server_port(tmp_path, monkeypatch):
                         StubBackend(lambda t, q: "mac", model_id="mlx"))
     assert b.ask([(0.0, Image.new("RGB", (8, 8)))], "q").text == "mac"
     assert b.routing["primary_failures"] == 1
+
+
+def test_fallback_sticks_to_local_for_the_rest_of_the_job():
+    """Within a job one primary failure keeps the local model: a hung server would cost a timeout per window."""
+    from forte_vision.vlm import FallbackBackend, StubBackend, VLMAnswer, VLMStats
+
+    calls = {"n": 0}
+    now = [0.0]
+
+    class Flaky:
+        model_id, revision = "gpu", "0"
+        stats = VLMStats()
+
+        def ask(self, frames, question, max_tokens=128):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise TimeoutError("server hung")
+            return VLMAnswer("gpu")
+
+    b = FallbackBackend(Flaky(), StubBackend(lambda t, q: "mac", model_id="mlx"), cooldown_sec=1,
+                        clock=lambda: now[0])
+    frames = [(0.0, Image.new("RGB", (8, 8)))]
+    b.begin_job(None)
+    assert b.ask(frames, "q").text == "mac"
+    now[0] = 100.0  # cooldown long gone, but still the same job
+    assert b.ask(frames, "q").text == "mac" and calls["n"] == 1
+    b.begin_job(None)  # next job tries the server again
+    assert b.ask(frames, "q").text == "gpu"
+
+
+def test_unhealthy_server_at_job_start_goes_straight_to_local():
+    from forte_vision.vlm import FallbackBackend, StubBackend, VLMStats
+
+    class Dead:
+        model_id, revision = "gpu", "0"
+        stats = VLMStats()
+
+        def healthy(self):
+            return False
+
+        def ask(self, frames, question, max_tokens=128):
+            raise AssertionError("an unhealthy server must not be asked")
+
+    b = FallbackBackend(Dead(), StubBackend(lambda t, q: "mac", model_id="mlx"))
+    b.begin_job(None)
+    assert b.ask([(0.0, Image.new("RGB", (8, 8)))], "q").text == "mac"
+    assert b.routing["primary_unhealthy"] == 1 and b.routing["fallback_calls"] == 1
+
+
+def test_health_check_against_local_server_and_dead_port(server):
+    import socket
+
+    assert OpenAICompatBackend(server).healthy()
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    assert not OpenAICompatBackend(f"http://127.0.0.1:{port}").healthy(timeout=1)
+
+
+def test_call_timeout_never_outlives_the_job_budget(server):
+    """No VLM call starts when the job budget is gone; the fallback does not start one either."""
+    import time
+
+    from forte_vision.vlm import FallbackBackend, StubBackend, start_job
+
+    frames = [(0.0, Image.new("RGB", (8, 8)))]
+    b = OpenAICompatBackend(server, timeout=60)
+    start_job(b, time.monotonic() + 30)
+    assert 25 < b._call_timeout() <= 30
+    start_job(b, time.monotonic() + 1)
+    with pytest.raises(TimeoutError):
+        b.ask(frames, "q")
+    assert _Handler.seen == []
+    fb = FallbackBackend(OpenAICompatBackend(server), StubBackend(lambda t, q: "mac", model_id="mlx"))
+    start_job(fb, time.monotonic() + 1)
+    with pytest.raises(TimeoutError):
+        fb.ask(frames, "q")
+
+
+def test_call_estimate_follows_the_backend_that_answers():
+    from forte_vision.vlm import DEFAULT_CALL_SEC, FALLBACK_CALL_SEC, FallbackBackend, StubBackend, expected_call_sec
+
+    gpu, mac = StubBackend(lambda t, q: "gpu"), StubBackend(lambda t, q: "mac")
+    b = FallbackBackend(gpu, mac)
+    assert expected_call_sec(b) == DEFAULT_CALL_SEC
+    gpu.stats.calls, gpu.stats.wall_sec = 10, 80.0
+    assert expected_call_sec(b) == 10.0
+    b.down_until = float("inf")
+    assert expected_call_sec(b) == FALLBACK_CALL_SEC
+

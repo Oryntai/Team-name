@@ -284,3 +284,16 @@ def test_soft_usable_or_unknown_support_keeps_strong_core(context, object_visibi
     )
     observed.events[0].visibility = object_visibility
     assert len(create_rules().evaluate(observed, context)) == 1
+
+
+def test_partial_batch_returns_proven_violation_but_never_negative(context):
+    positive = batch(
+        cashier_left_workstation="observed",
+        departure_before_client_service_completed="observed",
+    )
+    partial = ObservationBatch(complete=False, events=positive.events)
+    assert len(create_rules().evaluate(partial, context)) == 1
+    contrary = batch(cashier_left_workstation="not_observed")
+    with pytest.raises(IncompleteAnalysis):
+        create_rules().evaluate(ObservationBatch(complete=False, events=contrary.events), context)
+
