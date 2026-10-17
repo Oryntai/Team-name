@@ -20,7 +20,8 @@ def main(argv: list[str] | None = None) -> int:
     ob.add_argument("video")
     ob.add_argument("--video-id")
     ob.add_argument("--profile", choices=sorted(PROFILES), default="fast")
-    ob.add_argument("--backend", choices=["mlx", "transformers"], default="mlx")
+    ob.add_argument("--backend", choices=["mlx", "transformers", "openai"], default="mlx",
+                    help="openai — локальный llama-server/vLLM по FORTE_VLM_URL, ключ из FORTE_VLM_KEY_FILE")
     ob.add_argument("--model", help="id модели в локальном кеше HF или путь к весам")
     ob.add_argument("--deadline", type=float, default=240.0, help="секунд на анализ от старта")
     ob.add_argument("--detector", choices=["none", "nano", "small", "medium"], default="nano",

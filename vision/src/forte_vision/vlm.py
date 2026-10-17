@@ -131,6 +131,58 @@ class TransformersBackend:
         return a
 
 
+class OpenAICompatBackend:
+    """Локальный сервер с OpenAI-совместимым API: llama.cpp llama-server (MIT) или vLLM (Apache-2.0)
+    на своей машине в локальной сети. Облачные API этим классом не используются: base_url обязан
+    указывать на localhost или адрес из частной сети."""
+
+    def __init__(self, base_url: str, model_id: str = "local", api_key: str | None = None, timeout: float = 120.0):
+        import ipaddress
+        import urllib.parse
+
+        host = urllib.parse.urlparse(base_url).hostname or ""
+        try:
+            private = host == "localhost" or ipaddress.ip_address(host).is_private or ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            private = host.endswith(".local") or host == "localhost"
+        if not private:
+            raise ValueError(f"VLM-сервер должен быть локальным (localhost / частная сеть), а не {host!r}")
+        self.base_url = base_url.rstrip("/")
+        self.model_id, self.revision = model_id, "server"
+        self.api_key, self.timeout = api_key, timeout
+        self.stats = VLMStats()
+
+    def ask(self, frames, question, max_tokens=128):
+        import base64
+        import io
+        import json as _json
+        import urllib.request
+
+        content = []
+        for _, im in frames:
+            buf = io.BytesIO()
+            im.convert("RGB").save(buf, format="JPEG", quality=90)
+            content.append({"type": "image_url",
+                            "image_url": {"url": "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()}})
+        content.append({"type": "text", "text": frames_preamble(frames) + question})
+        body = _json.dumps({"model": self.model_id, "messages": [{"role": "user", "content": content}],
+                            "max_tokens": max_tokens, "temperature": 0.0}).encode()
+        req = urllib.request.Request(self.base_url + "/v1/chat/completions", data=body, method="POST",
+                                     headers={"Content-Type": "application/json"})
+        if self.api_key:
+            req.add_header("Authorization", "Bearer " + self.api_key)
+        t0 = time.perf_counter()
+        # прокси окружения не используем: кадры не должны уходить никуда, кроме указанного локального сервера
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(req, timeout=self.timeout) as r:
+            data = _json.loads(r.read())
+        usage = data.get("usage") or {}
+        a = VLMAnswer(data["choices"][0]["message"]["content"].strip(), int(usage.get("prompt_tokens", 0)),
+                      int(usage.get("completion_tokens", 0)), time.perf_counter() - t0)
+        self.stats.add(a)
+        return a
+
+
 @dataclass
 class StubBackend:
     """Детерминированная заглушка для тестов контракта: ответ — функция от (времена кадров, вопрос)."""
@@ -151,4 +203,12 @@ def make_backend(kind: str, model_id: str | None = None) -> VLMBackend:
         return MLXBackend(model_id) if model_id else MLXBackend()
     if kind == "transformers":
         return TransformersBackend(model_id) if model_id else TransformersBackend()
+    if kind == "openai":
+        # FORTE_VLM_URL — адрес локального сервера; ключ — из файла FORTE_VLM_KEY_FILE (не из аргументов)
+        url = os.environ.get("FORTE_VLM_URL")
+        if not url:
+            raise ValueError("для бэкенда openai задайте FORTE_VLM_URL (локальный llama-server / vLLM)")
+        key_file = os.environ.get("FORTE_VLM_KEY_FILE")
+        key = open(key_file, encoding="utf-8").read().strip() if key_file else None
+        return OpenAICompatBackend(url, model_id or "local", key)
     raise ValueError(f"неизвестный бэкенд VLM: {kind}")
