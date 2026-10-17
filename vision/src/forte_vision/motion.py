@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .video import sample
+from .video import PyAVSource
 
 
 @dataclass(frozen=True)
@@ -23,17 +23,39 @@ class MotionPeak:
     score: float
 
 
-def motion_energy(path: str, fps: float = 5.0, size: tuple[int, int] = (116, 212), pixel_thr: int = 18):
-    """Возвращает (times, energy): energy[i] — изменение между кадрами i-1 и i."""
-    times, energy, prev = [], [], None
-    for t, im in sample(path, fps=fps, size=size):
+def motion_energy(
+    src,
+    fps: float = 5.0,
+    size: tuple[int, int] = (116, 212),
+    pixel_thr: int = 18,
+    zone: tuple[float, float, float, float] | None = None,
+    frame_size: tuple[int, int] | None = None,
+):
+    """src — путь к файлу или источник кадров (PyAVSource / адаптер backend).
+    (times, energy, zone_energy): energy[i] — доля изменившихся пикселей между кадрами i-1 и i по всему
+    кадру, zone_energy — то же внутри зоны стола/рук (None, если зона не задана). zone — в пикселях
+    исходного кадра размера frame_size (ширина, высота)."""
+    mask = None
+    if zone is not None and frame_size is not None:
+        sx, sy = size[0] / frame_size[0], size[1] / frame_size[1]
+        x1, y1 = int(zone[0] * sx), int(zone[1] * sy)
+        x2, y2 = max(x1 + 1, int(np.ceil(zone[2] * sx))), max(y1 + 1, int(np.ceil(zone[3] * sy)))
+        mask = np.zeros((size[1], size[0]), dtype=bool)
+        mask[y1:y2, x1:x2] = True
+    times, energy, zone_energy, prev = [], [], [], None
+    if isinstance(src, str):
+        src = PyAVSource(src)
+    for t, im in src.sample(fps=fps, size=size):
         # по каналам RGB, а не по яркости: цветной объект на фоне той же яркости в сером не виден
         g = np.asarray(im.convert("RGB"), dtype=np.int16)
         if prev is not None:
-            energy.append(float((np.abs(g - prev).max(axis=2) > pixel_thr).mean()))
+            changed = np.abs(g - prev).max(axis=2) > pixel_thr
+            energy.append(float(changed.mean()))
+            if mask is not None:
+                zone_energy.append(float(changed[mask].mean()))
             times.append(t)
         prev = g
-    return np.asarray(times), np.asarray(energy)
+    return np.asarray(times), np.asarray(energy), (np.asarray(zone_energy) if mask is not None else None)
 
 
 def _smooth(x: np.ndarray, k: int) -> np.ndarray:

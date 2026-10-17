@@ -1,12 +1,14 @@
 """analyze_video: файл .mov -> Observation (контракт decision/) + diagnostics (внутреннее).
 
 Конвейер (гибрид, согласован с decision/):
-  1. движение: top-K пиков энергии — дешёвый источник кандидатов;
-  2. скрининг VLM: всё видео редкой выборкой, перекрывающимися окнами — открытый набор категорий;
-  3. объединение кандидатов из всех источников, ни один источник не фильтрует другой;
-  4. перепроверка кандидата: кадры полного разрешения, вопросы по предикатам и видимости.
-Покрытие честное: если скрининг не прошёл всё видео до дедлайна, coverage_complete=False,
-статус partial; если кандидат не перепроверен, его предикаты не заполняются (= unclear).
+  1. сцена (детектор): стол, место кассира, люди и предметы -> события-кандидаты и зона стола;
+  2. движение: пики по зоне стола/рук и немного по всему кадру;
+  3. скрининг VLM: всё видео редкой выборкой, перекрывающимися окнами — открытый набор категорий;
+  4. объединение кандидатов, ни один источник не фильтрует другой;
+  5. отбор под бюджет: лучший кандидат в каждом отрезке времени, затем по приоритету с разнесением;
+  6. перепроверка: кадры полного разрешения (для VLM — с рамками ролей), предикаты и видимость.
+Покрытие честное: если скрининг не прошёл всё видео до дедлайна, coverage_complete=False, partial;
+если отобранный кандидат не успели перепроверить — partial, его предикаты не заполняются (= unclear).
 """
 
 from __future__ import annotations
@@ -16,9 +18,9 @@ from dataclasses import asdict, dataclass, field
 
 import numpy as np
 
-from . import motion, predicates
+from . import motion, predicates, scene
 from .contract import validate_observation
-from .video import EVIDENCE_SOURCE, frame_id, grab_at, probe, sample
+from .video import EVIDENCE_SOURCE, PyAVSource, frame_id
 from .vlm import VLMBackend
 
 
@@ -26,27 +28,32 @@ from .vlm import VLMBackend
 class Profile:
     name: str
     motion_fps: float
-    motion_sec_per_peak: float  # один пик движения на столько секунд ролика
+    zone_sec_per_peak: float  # пики движения в зоне стола: один на столько секунд ролика
+    global_sec_per_peak: float  # пики по всему кадру (ходьба, вход/выход)
+    det_fps: float
     screen_fps: float
     screen_window_sec: float
     screen_overlap_sec: float
     recheck_frames: int
     max_rechecks: int
+    spread_seg_sec: float  # гарантированно по кандидату на каждый такой отрезок (если он там есть)
+    min_gap_sec: float = 2.5
     max_candidate_sec: float = 6.0  # длиннее — 4–6 кадров перепроверки уже ничего не доказывают
+    screen: bool = True
+    role_marks: bool = True
     screen_size: tuple[int, int] = (224, 416)
     recheck_size: tuple[int, int] | None = None  # None — исходное разрешение
 
 
 # Стартовые параметры, не оптимум: подбираются замерами и качеством на dev.
 PROFILES: dict[str, Profile] = {
-    "fast": Profile("fast", motion_fps=5.0, motion_sec_per_peak=10.0, screen_fps=0.5, screen_window_sec=20.0,
-                    screen_overlap_sec=2.0, recheck_frames=4, max_rechecks=8),
-    "full": Profile("full", motion_fps=5.0, motion_sec_per_peak=5.0, screen_fps=1.0, screen_window_sec=12.0,
-                    screen_overlap_sec=2.0, recheck_frames=6, max_rechecks=20),
+    "fast": Profile("fast", motion_fps=5.0, zone_sec_per_peak=8.0, global_sec_per_peak=20.0, det_fps=2.0,
+                    screen_fps=0.5, screen_window_sec=20.0, screen_overlap_sec=2.0, recheck_frames=4,
+                    max_rechecks=8, spread_seg_sec=15.0),
+    "full": Profile("full", motion_fps=5.0, zone_sec_per_peak=4.0, global_sec_per_peak=10.0, det_fps=3.0,
+                    screen_fps=1.0, screen_window_sec=12.0, screen_overlap_sec=2.0, recheck_frames=6,
+                    max_rechecks=20, spread_seg_sec=8.0),
 }
-
-# Чем выше, тем раньше кандидат перепроверяется при нехватке времени
-_PRIORITY = {"vlm": 2, "motion": 1}
 
 
 @dataclass
@@ -56,7 +63,7 @@ class _Cand:
     main: float
     sources: set[str]
     priority: float
-    categories: set[str] = field(default_factory=set)
+    kinds: set[str] = field(default_factory=set)  # подробности источника для diagnostics
     motion_score: float = 0.0
 
 
@@ -72,35 +79,59 @@ def _windows(duration: float, win: float, overlap: float) -> list[tuple[float, f
 
 
 def _split(c: _Cand, max_len: float) -> list[_Cand]:
-    """Длинный интервал VLM -> куски не длиннее max_len, каждый со своей главной секундой."""
+    """Длинный интервал -> куски не длиннее max_len, каждый со своей главной секундой."""
     n = max(1, int(np.ceil((c.end - c.start) / max_len)))
     if n == 1:
         return [c]
     edges = np.linspace(c.start, c.end, n + 1)
     return [
-        _Cand(float(a), float(b), float((a + b) / 2), set(c.sources), c.priority, set(c.categories), c.motion_score)
+        _Cand(float(a), float(b), float((a + b) / 2), set(c.sources), c.priority, set(c.kinds), c.motion_score)
         for a, b in zip(edges[:-1], edges[1:])
     ]
 
 
 def _merge(cands: list[_Cand], max_len: float, gap: float = 0.5) -> list[_Cand]:
-    """Сливаем пересекающиеся кандидаты, пока итог не длиннее max_len; иначе оставляем рядом (пересечение допустимо)."""
+    """Сливаем пересекающиеся кандидаты, пока итог не длиннее max_len; согласие источников повышает приоритет."""
     cands = sorted(cands, key=lambda c: c.start)
     out: list[_Cand] = []
     for c in cands:
         if out and c.start <= out[-1].end + gap and max(out[-1].end, c.end) - out[-1].start <= max_len:
             m = out[-1]
-            # главная секунда — от пика движения, если он есть: у VLM время грубее
-            if "motion" in c.sources and ("motion" not in m.sources or c.motion_score > m.motion_score):
+            # главная секунда: детектор и движение точнее по времени, чем VLM
+            if ("vlm" in m.sources and not (m.sources - {"vlm"})) or c.priority > m.priority and "vlm" not in c.sources:
                 m.main = c.main
             m.start, m.end = min(m.start, c.start), max(m.end, c.end)
+            new = c.sources - m.sources
             m.sources |= c.sources
-            m.categories |= c.categories
-            m.priority = max(m.priority, c.priority)
+            m.kinds |= c.kinds
+            m.priority = max(m.priority, c.priority) + 0.5 * len(new)
             m.motion_score = max(m.motion_score, c.motion_score)
         else:
             out.append(c)
     return out
+
+
+def _select(cands: list[_Cand], max_n: int, seg_len: float, min_gap: float, duration: float) -> list[_Cand]:
+    """Под бюджет перепроверок: сначала лучший в каждом отрезке (разнесение), потом по приоритету."""
+    chosen: list[_Cand] = []
+
+    def free(c: _Cand) -> bool:
+        return all(abs(c.main - o.main) >= min_gap for o in chosen)
+
+    for k in range(int(np.ceil(duration / seg_len))):
+        seg = [c for c in cands if k * seg_len <= c.main < (k + 1) * seg_len]
+        if seg:
+            best = max(seg, key=lambda c: c.priority)
+            if free(best):
+                chosen.append(best)
+    if len(chosen) > max_n:
+        chosen = sorted(chosen, key=lambda c: c.priority, reverse=True)[:max_n]
+    for c in sorted(cands, key=lambda c: c.priority, reverse=True):
+        if len(chosen) >= max_n:
+            break
+        if all(c is not o for o in chosen) and free(c):
+            chosen.append(c)
+    return chosen
 
 
 def _nearest(pts_pool: np.ndarray, t: float, lo: float, hi: float) -> float | None:
@@ -110,14 +141,35 @@ def _nearest(pts_pool: np.ndarray, t: float, lo: float, hi: float) -> float | No
     return float(inside[np.argmin(np.abs(inside - t))])
 
 
+def _peaks(times, energy, duration, sec_per_peak, base, kind) -> list[_Cand]:
+    if energy is None or len(energy) == 0:
+        return []
+    top_k = max(1, int(np.ceil(duration / sec_per_peak)))
+    peaks = motion.find_peaks(times, energy, duration, top_k=top_k)
+    hi = max((p.score for p in peaks), default=1.0) or 1.0
+    return [
+        _Cand(p.start_sec, p.end_sec, p.main_sec, {"motion"}, base + p.score / hi, {kind}, p.score)
+        for p in peaks
+    ]
+
+
+ROLE_HINT = (
+    "Boxes drawn by a person detector: green CASHIER = person at the cashier workstation, "
+    "orange PERSON = other people. Boxes can be wrong; rely on what you actually see.\n"
+)
+
+
 def analyze_video(
     path: str,
     backend: VLMBackend,
     video_id: str | None = None,
     profile: str | Profile = "fast",
     deadline_sec: float = 240.0,
+    detector: scene.Detector | None = None,
+    source=None,
 ) -> tuple[dict, dict]:
-    """Возвращает (observation, diagnostics). Observation всегда проходит validate_observation."""
+    """Возвращает (observation, diagnostics). Observation всегда проходит validate_observation.
+    source — источник кадров с probe/sample/grab_at; по умолчанию PyAV по path."""
     prof = PROFILES[profile] if isinstance(profile, str) else profile
     t_start = time.monotonic()
     deadline = t_start + deadline_sec
@@ -127,84 +179,98 @@ def analyze_video(
     def mark(stage: str, t0: float) -> None:
         timings[stage] = round(time.monotonic() - t0, 2)
 
+    src = source or PyAVSource(path)
     t0 = time.monotonic()
-    info = probe(path)
+    info = src.probe()
     dur = info.duration_sec
     mark("probe", t0)
+    cands: list[_Cand] = []
+    pts_pool: list[float] = []
 
-    # 1. движение
+    # 1. сцена
+    sc = None
+    if detector is not None:
+        t0 = time.monotonic()
+        dets = detector.detect(src.sample(fps=prof.det_fps))
+        sc = scene.build_scene(dets, info.width, info.height)
+        for e in scene.scene_events(sc, dur):
+            cands.append(_Cand(e.start_sec, e.end_sec, e.main_sec, {"detector"}, e.priority, {e.kind}))
+        pts_pool.extend(d.t for d in dets)
+        mark("scene", t0)
+
+    # 2. движение: зона стола важнее всего кадра
     t0 = time.monotonic()
-    m_times, m_energy = motion.motion_energy(path, fps=prof.motion_fps)
-    top_k = max(2, int(np.ceil(dur / prof.motion_sec_per_peak)))
-    peaks = motion.find_peaks(m_times, m_energy, dur, top_k=top_k)
-    cands = [
-        _Cand(p.start_sec, p.end_sec, p.main_sec, {"motion"}, _PRIORITY["motion"] + p.score, motion_score=p.score)
-        for p in peaks
-    ]
-    pts_pool = m_times.copy()
+    zone = sc.zone() if sc is not None else None
+    m_times, m_energy, z_energy = motion.motion_energy(
+        src, fps=prof.motion_fps, zone=zone, frame_size=(info.width, info.height)
+    )
+    cands += _peaks(m_times, z_energy, dur, prof.zone_sec_per_peak, 1.2, "desk_motion")
+    cands += _peaks(m_times, m_energy, dur, prof.global_sec_per_peak if zone else prof.zone_sec_per_peak,
+                    0.6 if zone else 1.2, "frame_motion")
+    pts_pool.extend(m_times.tolist())
     mark("motion", t0)
 
-    # 2. скрининг всего видео
+    # 3. скрининг всего видео
     t0 = time.monotonic()
-    screen_frames = list(sample(path, fps=prof.screen_fps, size=prof.screen_size))
-    pts_pool = np.unique(np.concatenate([pts_pool, [t for t, _ in screen_frames]]))
-    windows = _windows(dur, prof.screen_window_sec, prof.screen_overlap_sec)
-    covered_until, screen_items = 0.0, []
-    q_screen = predicates.screen_question()
-    for ws, we in windows:
-        if time.monotonic() > deadline:
-            break
-        frames = [(t, im) for t, im in screen_frames if ws - 1e-6 <= t < we]
-        if frames:
-            ans = backend.ask(frames, q_screen, max_tokens=200)
-            for cat, s, e in predicates.parse_screen(ans.text, ws, we):
-                screen_items.append((cat, s, e))
-                cands.extend(
-                    _split(_Cand(s, max(e, s), (s + e) / 2, {"vlm"}, _PRIORITY["vlm"], categories={cat}),
-                           prof.max_candidate_sec)
-                )
-        covered_until = we
+    windows = _windows(dur, prof.screen_window_sec, prof.screen_overlap_sec) if prof.screen else []
+    covered_until = 0.0 if prof.screen else dur
+    if prof.screen:
+        screen_frames = list(src.sample(fps=prof.screen_fps, size=prof.screen_size))
+        pts_pool.extend(t for t, _ in screen_frames)
+        q_screen = predicates.screen_question()
+        for ws, we in windows:
+            if time.monotonic() > deadline:
+                break
+            frames = [(t, im) for t, im in screen_frames if ws - 1e-6 <= t < we]
+            if frames:
+                ans = backend.ask(frames, q_screen, max_tokens=200)
+                for cat, s, e in predicates.parse_screen(ans.text, ws, we):
+                    cands.extend(_split(_Cand(s, max(e, s), (s + e) / 2, {"vlm"}, 2.0, {f"screen:{cat}"}),
+                                        prof.max_candidate_sec))
+            covered_until = we
     coverage_complete = covered_until >= dur - 1e-6
     mark("screen", t0)
 
-    # 3. объединение
-    merged = _merge(cands, prof.max_candidate_sec)
+    # 4–5. объединение и отбор
+    pool = _merge(cands, prof.max_candidate_sec)
+    selected = sorted(_select(pool, prof.max_rechecks, prof.spread_seg_sec, prof.min_gap_sec, dur),
+                      key=lambda c: c.priority, reverse=True)
 
-    # 4. перепроверка, самые приоритетные первыми
+    # 6. перепроверка
     t0 = time.monotonic()
-    order = sorted(range(len(merged)), key=lambda i: merged[i].priority, reverse=True)
     rechecked: dict[int, tuple[dict, dict, list[float]]] = {}
     names_p, names_v = list(predicates.PREDICATES), list(predicates.VISIBILITY)
     table = {**predicates.PREDICATES, **predicates.VISIBILITY}
     q_pred = predicates.predicate_question(names_p + names_v, table)
-    for i in order[: prof.max_rechecks]:
+    for c in selected:
         if time.monotonic() > deadline:
             break
-        c = merged[i]
         times = sorted(set(np.linspace(c.start, c.end, prof.recheck_frames).round(3).tolist()) | {round(c.main, 3)})
-        frames = grab_at(path, times, size=prof.recheck_size)
-        ans = backend.ask(frames, q_pred, max_tokens=220)
+        frames = src.grab_at(times, size=prof.recheck_size)
+        question = q_pred
+        if detector is not None and prof.role_marks and sc is not None and sc.cashier_slot is not None:
+            frames_for_vlm = scene.mark_roles(frames, detector.detect(frames), sc.cashier_slot)
+            question = ROLE_HINT + q_pred
+        else:
+            frames_for_vlm = frames
+        ans = backend.ask(frames_for_vlm, question, max_tokens=220)
         tri = predicates.parse_tri_state(ans.text, names_p + names_v)
-        rechecked[i] = (
-            {n: tri[n] for n in names_p},
-            {n: tri[n] for n in names_v},
-            [t for t, _ in frames],
-        )
+        rechecked[id(c)] = ({n: tri[n] for n in names_p}, {n: tri[n] for n in names_v}, [t for t, _ in frames])
     mark("recheck", t0)
 
-    # 5. сборка Observation
+    # 7. сборка Observation: только отобранные кандидаты
+    base_pool = np.unique(np.asarray(pts_pool, dtype=float)) if pts_pool else np.asarray([0.0])
     out_cands, diag_cands = [], {}
-    for k, i in enumerate(sorted(range(len(merged)), key=lambda j: merged[j].start)):
-        c = merged[i]
-        pred, vis, seen = rechecked.get(i, ({}, {}, []))
-        pool = np.unique(np.concatenate([pts_pool, seen])) if seen else pts_pool
+    for k, c in enumerate(sorted(selected, key=lambda c: c.start)):
+        pred, vis, seen = rechecked.get(id(c), ({}, {}, []))
+        ppool = np.unique(np.concatenate([base_pool, seen])) if seen else base_pool
         ev_pts: list[float] = []
         for target in (c.main, c.start, c.end):
-            p = _nearest(pool, target, c.start, c.end)
+            p = _nearest(ppool, target, c.start, c.end)
             if p is not None and p not in ev_pts:
                 ev_pts.append(p)
         if not ev_pts:  # интервал уже шага выборки — берём ближайший кадр и расширяем интервал до него
-            p = float(pool[np.argmin(np.abs(pool - c.main))])
+            p = float(ppool[np.argmin(np.abs(ppool - c.main))])
             c.start, c.end = min(c.start, p), max(c.end, p)
             ev_pts = [p]
         c.main = min(max(c.main, c.start), c.end)
@@ -224,13 +290,10 @@ def analyze_video(
                 "visibility": vis,
             }
         )
-        diag_cands[cid] = {
-            "screen_categories": sorted(c.categories),
-            "motion_score": round(c.motion_score, 5),
-            "rechecked": i in rechecked,
-        }
+        diag_cands[cid] = {"kinds": sorted(c.kinds), "priority": round(c.priority, 3),
+                           "motion_score": round(c.motion_score, 5), "rechecked": id(c) in rechecked}
 
-    all_rechecked = len(rechecked) == len(merged)
+    all_rechecked = len(rechecked) == len(selected)
     obs = {
         "video_id": vid,
         "duration_sec": round(dur, 3),
@@ -243,11 +306,19 @@ def analyze_video(
     diag = {
         "model_id": backend.model_id,
         "revision": backend.revision,
+        "detector": None if detector is None else f"rfdetr-{detector.size}@{detector.device}",
         "profile": asdict(prof),
         "stage_timings": timings,
         "vlm": asdict(backend.stats),
         "screen_windows": len(windows),
         "screen_covered_until": round(covered_until, 3),
+        "pool_size": len(pool),
+        "raw_candidates": len(cands),
+        "scene": None if sc is None else {
+            "desk_found": sc.desk_box is not None,
+            "cashier_slot_found": sc.cashier_slot is not None,
+            "cashier_present_frac": round(float(sc.cashier_present.mean()), 3) if len(sc.times) else None,
+        },
         "candidates": diag_cands,
         "video": asdict(info),
     }

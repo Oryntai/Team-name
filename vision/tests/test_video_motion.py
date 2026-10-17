@@ -31,9 +31,19 @@ def test_frame_id_stable():
 
 
 def test_motion_peak_inside_event(synthetic_video):
-    times, energy = motion.motion_energy(synthetic_video, fps=5.0)
+    times, energy, zone_energy = motion.motion_energy(synthetic_video, fps=5.0)
+    assert zone_energy is None
     peaks = motion.find_peaks(times, energy, DURATION, top_k=3)
     assert peaks, "движение в событии должно дать пик"
     assert any(EVENT[0] - 0.5 <= p.main_sec <= EVENT[1] + 0.5 for p in peaks)
     for p in peaks:
         assert 0 <= p.start_sec <= p.main_sec <= p.end_sec <= DURATION
+
+
+def test_zone_energy_ignores_motion_outside_zone(synthetic_video):
+    # объект двигается в полосе y 300–420; зона стола ниже (y 600–700) — в ней движения нет
+    _, energy, zone_energy = motion.motion_energy(
+        synthetic_video, fps=5.0, zone=(50, 600, 400, 700), frame_size=(464, 848)
+    )
+    assert energy.max() > 0.005
+    assert zone_energy.max() < energy.max() / 5

@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import time
+from dataclasses import replace
 
 from .contract import ContractError
 from .observer import PROFILES, analyze_video, failed_observation
@@ -22,6 +23,9 @@ def main(argv: list[str] | None = None) -> int:
     ob.add_argument("--backend", choices=["mlx", "transformers"], default="mlx")
     ob.add_argument("--model", help="id модели в локальном кеше HF или путь к весам")
     ob.add_argument("--deadline", type=float, default=240.0, help="секунд на анализ от старта")
+    ob.add_argument("--detector", choices=["none", "nano", "small", "medium"], default="nano",
+                    help="RF-DETR для сцены и ролей (только Apache-размеры)")
+    ob.add_argument("--no-screen", action="store_true", help="без скрининга VLM (абляция)")
     ob.add_argument("--out", help="куда писать Observation (по умолчанию stdout)")
     ob.add_argument("--diag", help="куда писать diagnostics")
     a = ap.parse_args(argv)
@@ -36,7 +40,14 @@ def main(argv: list[str] | None = None) -> int:
     t0 = time.monotonic()
     try:
         backend = make_backend(a.backend, a.model)
-        obs, diag = analyze_video(a.video, backend, video_id=vid, profile=a.profile, deadline_sec=a.deadline)
+        detector = None
+        if a.detector != "none":
+            from .scene import Detector
+
+            detector = Detector(a.detector)
+        prof = replace(PROFILES[a.profile], screen=not a.no_screen)
+        obs, diag = analyze_video(a.video, backend, video_id=vid, profile=prof, deadline_sec=a.deadline,
+                                  detector=detector)
     except (ContractError, ValueError, OSError, RuntimeError) as e:
         obs = failed_observation(vid, None)
         diag = {"error": f"{type(e).__name__}: {e}", "elapsed_sec": round(time.monotonic() - t0, 2)}

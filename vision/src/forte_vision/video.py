@@ -110,3 +110,22 @@ def grab_at(path: str, times: Sequence[float], size: tuple[int, int] | None = No
     for t, im in out:
         uniq.setdefault(t, im)
     return sorted(uniq.items())
+
+
+class PyAVSource:
+    """Источник кадров по умолчанию: файл читается PyAV. Тот же интерфейс реализует адаптер backend."""
+
+    def __init__(self, path: str):
+        self.path = path
+        self._info: VideoInfo | None = None
+
+    def probe(self) -> VideoInfo:
+        if self._info is None:
+            self._info = probe(self.path)
+        return self._info
+
+    def sample(self, fps: float, size: tuple[int, int] | None = None, start: float = 0.0, end: float | None = None):
+        return sample(self.path, fps, size, start, end)
+
+    def grab_at(self, times, size: tuple[int, int] | None = None):
+        return grab_at(self.path, times, size)

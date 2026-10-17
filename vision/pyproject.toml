@@ -15,7 +15,9 @@ dependencies = [
 mlx = ["mlx-vlm>=0.7.8"]
 # Linux + NVIDIA: transformers, Apache-2.0
 cuda = ["transformers>=4.57", "torch>=2.4", "accelerate>=1.0"]
-dev = ["pytest>=8"]
+# Детектор сцены и ролей: RF-DETR (Apache-2.0, только размеры N–L; тянет supervision, MIT)
+detector = ["rfdetr>=1.11"]
+dev = ["pytest>=8", "pydantic>=2"]  # pydantic — для теста адаптера со схемой backend
 
 [project.scripts]
 forte-vision = "forte_vision.cli:main"
