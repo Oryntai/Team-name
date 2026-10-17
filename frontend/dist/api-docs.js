@@ -3,7 +3,7 @@
 
 import { fetchPublicKey } from "./api.js";
 
-const KEY_PLACEHOLDER = "<ключ>";
+const KEY_PLACEHOLDER = "YOUR_API_KEY";
 
 const escapeHtml = (text) => String(text).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
@@ -76,6 +76,30 @@ while True:
     time.sleep(1.5)
 
 print(result["status"], result.get("verdict"), len(result.get("violations", [])))`,
+    },
+    javascript: {
+      label: "JavaScript",
+      lang: "shell",
+      code: `// Node.js 18+
+import { readFile } from "node:fs/promises";
+
+const BASE = "${base}";
+const headers = { "X-API-Key": process.env.FORTE_API_KEY ?? "${key}" };
+
+// 1. Отправить видео
+const form = new FormData();
+form.append("file", new Blob([await readFile("./video.mov")], { type: "video/quicktime" }), "video.mov");
+const upload = await fetch(\`\${BASE}/api/v1/analyze\`, { method: "POST", headers, body: form });
+if (!upload.ok) throw new Error(\`Upload failed (\${upload.status}): \${await upload.text()}\`);
+const { job_id } = await upload.json();
+
+// 2. Ждать результат
+let result;
+do {
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  result = await (await fetch(\`\${BASE}/api/v1/jobs/\${job_id}\`, { headers })).json();
+} while (result.status === "processing");
+console.log(JSON.stringify(result, null, 2));`,
     },
   };
 }
