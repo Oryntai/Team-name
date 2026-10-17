@@ -66,7 +66,10 @@ def to_public_payload(
             raise ValueError("invalid event anchor")
         evidence_frames = []
         for ref in event.evidence:
-            image = evidence_map[ref.frame_id]
+            try:
+                image = evidence_map[ref.frame_id]
+            except KeyError as error:
+                raise ValueError("missing evidence frame") from error
             if not isinstance(image, VerifiedJPEG):
                 raise ValueError("expected explicit VerifiedJPEG evidence")
             if (image.video_id, image.frame_id, image.pts_sec) != (

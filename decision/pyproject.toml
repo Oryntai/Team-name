@@ -9,6 +9,7 @@ description = "Local observation contracts, conservative decision rules, indepen
 [project.optional-dependencies]
 dev = ["pytest>=7"]
 [project.scripts]
+forte-decide = "forte_decision.cli:main"
 forte-evaluate = "forte_decision.evaluation:main"
 [tool.setuptools.packages.find]
 include = ["forte_decision*"]

@@ -9,6 +9,25 @@ State = Literal["observed", "not_observed", "unclear"]
 STATES = {"observed", "not_observed", "unclear"}
 
 
+def strict_json_loads(value):
+    """Reject ambiguous duplicate keys and non-standard NaN/Infinity JSON."""
+
+    def object_pairs(pairs):
+        result = {}
+        for key, item in pairs:
+            if key in result:
+                raise ValueError("duplicate JSON object key")
+            result[key] = item
+        return result
+
+    def invalid_constant(value):
+        raise ValueError("non-finite JSON constant")
+
+    return json.loads(
+        value, object_pairs_hook=object_pairs, parse_constant=invalid_constant
+    )
+
+
 def number(value, name):
     if (
         isinstance(value, bool)
@@ -141,7 +160,7 @@ class Observation:
 
     @classmethod
     def from_json(cls, value):
-        return cls.from_dict(json.loads(value))
+        return cls.from_dict(strict_json_loads(value))
 
     def to_json(self):
         return json.dumps(asdict(self), allow_nan=False, sort_keys=True)
@@ -185,7 +204,7 @@ class Rule:
 
     @classmethod
     def from_json(cls, value):
-        return cls(**json.loads(value))
+        return cls(**strict_json_loads(value))
 
     def to_json(self):
         return json.dumps(asdict(self), allow_nan=False, sort_keys=True)

@@ -4,7 +4,7 @@ import argparse
 import json
 import re
 from dataclasses import dataclass
-from .contracts import number, text
+from .contracts import number, text, strict_json_loads
 
 
 def validate_splits(records):
@@ -157,6 +157,9 @@ def evaluate(predictions, annotations):
                     raise ValueError("event must be an object")
                 if number(event.get("timecode_sec"), "timecode_sec") < 0:
                     raise ValueError("negative event time")
+                for field in ("type", "rule_id"):
+                    if event.get(field) is not None:
+                        text(event[field], field)
     for row in preds.values():
         if row.get("status") == "complete" and row.get("verdict") in (
             "violation",
@@ -298,8 +301,8 @@ def main():
     args = parser.parse_args()
 
     def read(path):
-        with open(path) as f:
-            return json.load(f)
+        with open(path, encoding="utf-8") as f:
+            return strict_json_loads(f.read())
 
     output = (
         evaluate(read(args.predictions), read(args.annotations))

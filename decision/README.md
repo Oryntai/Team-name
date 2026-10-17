@@ -20,7 +20,7 @@ result = decide(observation, [rule])
 print(result.to_json())
 ```
 
-## Observer → decision contract (Claude/backend handoff)
+## Standalone local JSON contract (synthetic/offline harness)
 
 `Observation` JSON has `video_id` (nonempty string), `duration_sec` (finite positive number), `analysis_status` (`complete`, `partial`, `failed`), `coverage_complete` (strict bool), and `candidates` (array). Complete coverage is an upstream assertion about processing, never inferred from an empty candidate array.
 
@@ -28,7 +28,9 @@ Each candidate has stable `candidate_id`, `start_sec`, `end_sec`, `main_sec`, `s
 
 Evidence references contain only `frame_id`, `pts_sec`, and `source`. IDs must be stable within one video; a repeated ID must have identical PTS/source. No media bytes or external frame URLs belong in this contract. All timestamps are finite numeric values; bools are rejected. Require `0 <= start <= main <= end <= duration`; each evidence PTS lies inside its candidate interval. Candidate IDs must be unique. Malformed input raises an exception and must become upstream analysis failure, never a clean negative.
 
-Rule JSON fields: `rule_id`, `type`, `title`, `source_document`, `source_paragraph`, `source_url`, `applicability`, `required`, `exceptions`, `visibility_required`, `description_template`. Four predicate lists contain unique string names. Description is literal reviewed text (no executable/interpolated template). All applicability and required predicates plus visibility requirements must be observed. Every exception must explicitly be not_observed. Missing/unclear blocks a positive. At least one real input evidence reference is required. The engine records per-candidate reasons in diagnostics.
+Rule JSON fields: `rule_id`, `type`, `title`, `source_document`, `source_paragraph`, `source_url`, `applicability`, `required`, `exceptions`, `visibility_required`, `description_template`. Four predicate lists contain unique string names. Description is literal reviewed text (no executable/interpolated template). Default `mode="review"` requires all core `required` predicates observed and every exception explicitly not_observed. Explicit not_observed core/applicability or observed exception rejects that rule. Unknown core/exception remains unresolved. With strong core, unclear applicability or visibility permits a **possible** violation; diagnostics retain conditional-context and visibility caveats. Descriptions must use human-reviewed conditional wording. `mode="strict"` additionally requires observed applicability/visibility; otherwise those candidates remain unresolved. At least one real input evidence reference is required.
+
+Candidates mentioning named core predicates target their corresponding rules; other rules with no mentioned core are not targeted. If no core is named, unknown/missing core stays unresolved. Observed predicates not covered by the catalog also mark unresolved. Complete analysis with known supported events may return violation despite other unresolved candidates. With no supported events, any unresolved candidate makes the result incomplete, never no_violation. Empty complete batches and explicitly rejected covered candidates can produce no_violation. The engine does not measure calibration or real-data accuracy.
 
 ## Result and backend boundary
 
@@ -60,3 +62,31 @@ This evaluates timing and classification separately; it is not type-constrained 
 Split manifests are arrays of `{video_id,sha256,group_id,split}`. Video IDs must be unique, SHA must contain exactly 64 hexadecimal characters, and group ID must be a nonempty string. Both SHA and group must remain within one of train/dev/test; validator rejects crossing. Multiple distinct video IDs may share SHA within one split. Group all related source videos together and compute SHA locally. Never split frames at random. This validator trusts supplied metadata and does not open videos.
 
 The parent metadata inventory leaves `scenario_group:null` until manual grouping. Before split validation, review related videos, assign nonempty scenario groups, map each reviewed `scenario_group` to `group_id`, and add the intended split; do not silently substitute file paths or frame IDs for unknown groups. Example validator row: `{"video_id":"v1","sha256":"<64 hex characters>","group_id":"reviewed-session-1","split":"train"}`.
+
+## Local integration harness
+
+```sh
+forte-decide --observation /local/observation.json \
+  --rules /local/catalog-a.json --rules /local/catalog-b.json \
+  --output /local/decision.json --max-anchor-delta-sec 1.0
+# Or: python -m forte_decision.cli ...
+```
+
+Install editable again after adding the console entry point. Each catalog is a JSON rule array or an object containing only `rules` with that array. Multiple catalogs combine; duplicate rule IDs and an empty combined catalog fail closed. Parsing rejects duplicate JSON keys and nonstandard NaN/Infinity constants. Output atomically replaces the explicit destination with private file permissions; it cannot replace observation/catalog input paths. Destination parent must already exist.
+
+This CLI writes **internal results only**. It never opens media or accepts an evidence manifest: backend must verify local JPEG extraction and call the public adapter. Stdout contains only `status` and `event_count`; parse/load failures print a generic error without input, rule text or exception messages. Exit codes: 0 complete, 1 invalid input/configuration/I/O, 2 incomplete analysis (internal result still saved), argparse usage errors also use 2. The saved file contains full diagnostics and source descriptions.
+
+**Real observations, decision JSON, descriptions, frames and videos must remain local. Do not print them into cloud agent/tool logs or send them to cloud AI.** Run the harness locally and report only aggregate status/counts. Do not use the introductory `print(result.to_json())` synthetic demonstration on real data. The harness and evaluator make no cloud requests, but whoever invokes them owns the logging boundary.
+
+
+## Canonical production backend adapter
+
+Set backend `rules_factory="forte_decision.backend_adapter:create_rules"`. The zero-argument factory loads only repository `rules/cash_receipt.json` (two seed rules). Optional `FORTE_RULE_CATALOGS` is a JSON array of local catalog paths; packaging outside this repository must supply it. Factory validates rules/configuration at startup. For tests or explicit construction: `BackendRules(catalog_paths=[...], mode="review", max_anchor_delta_sec=1.0)`.
+
+`evaluate(observations: backend.contracts.ObservationBatch, context: backend.contracts.AnalysisContext) -> list[backend.contracts.RuleEvent]` uses the existing canonical contract directly. It rejects alternate dictionaries/wire formats. The standalone JSON Observation is **not** another production boundary. `evaluate_candidates` is the shared internal logic, with no duration parameter: actual video duration and decoded PTS validation belong to backend VideoIO/worker. No duration is inferred from event end. Evidence IDs derive deterministically from job ID and actual supplied PTS; duplicate canonical candidates deduplicate.
+
+Backend observations map supplies tri-state named atomic predicates. For named rule visibility requirements, explicit observations under the exact name or `visibility:<name>` are accepted. Conflicting forms fail. Object `visibility` values (`clear`, `partial`, `unusable`) never establish all-positions visibility or any named visibility predicate. They map only to internal support `evidence_usable`: observed if any supplied object is clear/partial, not_observed if the nonempty map is entirely unusable, unclear if the map is empty. All-unusable candidates remain unresolved (even with explicit false core), preventing both positive output and a clean negative from unusable evidence. Partial/clear and empty/unknown object visibility do not hard-gate strong core; unknown support is retained as a diagnostic caveat. Other supported candidates can still establish a positive in a complete batch. No frame/image content is opened by the adapter.
+
+Incomplete batches or unresolved-only results raise backend `IncompleteAnalysis`, which must produce official failed. A complete empty batch returns `[]`. Known positives can return despite unresolved other candidates. RuleEvent description equals the literal reviewed `rule.description_template`; source document/title, paragraph, URL and rule ID travel in separate canonical fields so backend appends the citation exactly once. Internal DecisionResult diagnostics contain caveats; backend RuleEvent has no dedicated caveat field, so production catalog descriptions must retain possible/conditional wording.
+
+Local CLI also accepts `--mode review` (default) or `--mode strict`. Never send canonical observations, local results or their descriptions to cloud logs.

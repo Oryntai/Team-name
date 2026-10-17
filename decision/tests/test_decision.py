@@ -42,7 +42,12 @@ def test_conservative(observation, rule, change):
         ),
         [rule],
     )
-    assert result.verdict == "no_violation" and result.diagnostics[0]["reasons"]
+    if change == "visibility":
+        assert result.verdict == "violation" and result.diagnostics[0]["caveats"]
+    elif change == "exception_observed":
+        assert result.verdict == "no_violation"
+    else:
+        assert result.status == "incomplete" and result.verdict is None
 
 
 @pytest.mark.parametrize(
@@ -95,7 +100,7 @@ def test_merge_separate_provenance(observation, rule):
 
 def test_adapter(observation, rule):
     result = decide(observation, [rule])
-    with pytest.raises(KeyError):
+    with pytest.raises(ValueError, match="missing evidence"):
         to_public_payload(result, {}, job_id="job")
     image = VerifiedJPEG("wrong", "f3", 3, b"\xff\xd8\xff\xd9")
     with pytest.raises(ValueError):
@@ -462,3 +467,30 @@ def test_anchor_span_blocks_transitive_bridge(observation, rule):
         )
         == 1
     )
+
+
+def test_review_unknown_context_is_possible_with_caveat(observation, rule):
+    c = observation.candidates[0]
+    predicates = dict(c.predicates)
+    predicates.pop("in_demo_zone")
+    result = decide(
+        replace(observation, candidates=(replace(c, predicates=predicates),)), [rule]
+    )
+    assert result.verdict == "violation"
+    assert result.diagnostics[0]["caveats"]
+    strict = decide(
+        replace(observation, candidates=(replace(c, predicates=predicates),)),
+        [rule],
+        mode="strict",
+    )
+    assert strict.status == "incomplete"
+
+
+def test_review_exception_unknown_blocks(observation, rule):
+    c = observation.candidates[0]
+    predicates = dict(c.predicates)
+    predicates.pop("demo_permission_present")
+    result = decide(
+        replace(observation, candidates=(replace(c, predicates=predicates),)), [rule]
+    )
+    assert result.status == "incomplete"

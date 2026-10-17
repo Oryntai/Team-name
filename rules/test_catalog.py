@@ -10,6 +10,15 @@ def load_rules():
     return [Rule.from_json(json.dumps(row)) for row in rows]
 
 
+def test_predicate_questions_cover_seed_catalog_once():
+    questions = json.loads(Path(__file__).with_name('predicate_questions.json').read_text(encoding='utf-8'))
+    assert len({q['name'] for q in questions}) == len(questions)
+    rules = load_rules()
+    assert {q['name'] for q in questions if q['kind']=='predicate'} == {k for r in rules for k in (*r.applicability,*r.required,*r.exceptions)}
+    assert {q['name'] for q in questions if q['kind']=='visibility'} == {k for r in rules for k in r.visibility_required}
+    assert all(q['visible_if'].strip() for q in questions)
+
+
 def observation_for(rule, *, predicates=None, visibility=None):
     return Observation.from_dict({
         "video_id": "synthetic-policy-fixture",
@@ -41,18 +50,25 @@ def test_verified_receipt_context_with_visible_condition_emits_sourced_event():
         assert rule.source_paragraph in result.events[0].description
 
 
-def test_receipt_rule_does_not_apply_to_payment_or_unknown_operation():
+def test_receipt_rule_rejects_explicit_other_operation_but_keeps_uncertain_context_for_review():
     for rule in load_rules():
         for state in ("not_observed", "unclear"):
             result = decide(observation_for(rule, predicates={"cash_receipt_operation_established": state}), [rule])
-            assert result.events == ()
+            if state == 'not_observed':
+                assert result.events == ()
+            else:
+                assert result.verdict == 'violation'
+                assert 'Если' in result.events[0].description
 
 
-def test_offscreen_client_cannot_be_called_absent():
+def test_review_keeps_strong_core_but_strict_requires_complete_visibility():
     rule = load_rules()[0]
     result = decide(observation_for(rule, visibility={"all_possible_client_positions_visible": "unclear"}), [rule])
-    assert result.events == ()
-    assert result.diagnostics[0]["supported"] is False
+    assert result.verdict == 'violation'
+    assert result.diagnostics[0]['caveats']
+    strict = decide(observation_for(rule, visibility={"all_possible_client_positions_visible": "unclear"}), [rule], mode='strict')
+    assert strict.events == ()
+    assert strict.status == 'incomplete' and strict.verdict is None
 
 
 def test_standing_up_is_not_departure_before_service_completion():
