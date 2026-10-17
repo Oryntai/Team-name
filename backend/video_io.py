@@ -354,8 +354,7 @@ class VideoIO:
     def iter_frames(self, interval_sec: float, batch_size: int = 256):
         """Yield interval samples across the entire video using bounded batches.
 
-        This is a batched iterator, not a second decoder. Each batch requires at
-        most one FFmpeg extraction. Unlike sample_frames, 256 is a batch cap,
+        This is a batched iterator, not a second decoder. Each batch requires one or more bounded FFmpeg extractions. Unlike sample_frames, 256 is a batch cap,
         not a whole-video cap. Resize inference images after receiving them;
         the shared cache preserves original evidence JPEGs.
         """

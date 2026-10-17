@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 
 # Что именно должно быть видно, чтобы ответить "yes". Формулировки нейтральные: только наблюдаемое.
@@ -57,17 +58,30 @@ def screen_question() -> str:
 def predicate_question(names: list[str], table: dict[str, str]) -> str:
     lines = "\n".join(f'- "{n}": {table[n]}' for n in names)
     return (
-        "For each statement answer \"yes\" only if it is clearly visible in these frames, "
-        "\"no\" if it is clearly not happening, \"unclear\" if it cannot be judged from what is visible.\n"
+        'For each statement answer "yes" only if it is clearly visible in these frames, '
+        '"no" if it is clearly not happening, "unclear" if it cannot be judged from what is visible.\n'
         f"{lines}\n"
-        "Return ONLY a JSON object mapping each key to \"yes\", \"no\" or \"unclear\"."
+        'Return ONLY a JSON object mapping each key to "yes", "no" or "unclear".'
     )
+
+
+def _reject_constant(value):
+    raise ValueError("non-finite JSON constant")
+
+
+def _unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON key")
+        result[key] = value
+    return result
 
 
 def _json_blob(text: str, opener: str, closer: str):
     """Первый сбалансированный JSON-фрагмент: модели любят оборачивать ответ в ``` и прозу."""
     start = text.find(opener)
-    while start != -1:
+    if start != -1:
         depth = 0
         for i in range(start, len(text)):
             if text[i] == opener:
@@ -76,10 +90,13 @@ def _json_blob(text: str, opener: str, closer: str):
                 depth -= 1
                 if depth == 0:
                     try:
-                        return json.loads(text[start : i + 1])
-                    except json.JSONDecodeError:
-                        break
-        start = text.find(opener, start + 1)
+                        return json.loads(
+                            text[start : i + 1],
+                            parse_constant=_reject_constant,
+                            object_pairs_hook=_unique_object,
+                        )
+                    except ValueError:
+                        return None
     return None
 
 
@@ -93,32 +110,77 @@ def parse_tri_state(text: str, names: list[str]) -> dict[str, str]:
     return out
 
 
-def parse_screen(text: str, t_min: float, t_max: float) -> list[tuple[str, float, float]]:
-    """Список (категория, start, end), обрезанный по окну; мусор и неизвестные категории отбрасываем."""
-    obj = _json_blob(text, "[", "]")
+def parse_screen_checked(
+    text: str, t_min: float, t_max: float
+) -> tuple[list[tuple[str, float, float]], bool]:
+    """Return candidates plus parse validity; valid [] differs from failed parsing.
+
+    Preserve usable entries for diagnostics, but any malformed entry makes the
+    whole window unresolved. Clipping never repairs non-finite or reversed time.
+    """
+    # A list buried in an error object/prose is not a valid negative response.
+    # Accept a complete JSON document, optionally wrapped in one JSON code fence.
+    document = text.strip()
+    if document.startswith("```"):
+        fence = re.fullmatch(
+            r"```(?:json)?\s*(.*?)\s*```", document, re.DOTALL | re.IGNORECASE
+        )
+        if fence is None:
+            return [], False
+        document = fence.group(1)
+    try:
+        obj = json.loads(
+            document, parse_constant=_reject_constant, object_pairs_hook=_unique_object
+        )
+    except (ValueError, TypeError):
+        return [], False
     out: list[tuple[str, float, float]] = []
     if not isinstance(obj, list):
-        return out
-    for it in obj:
-        if not isinstance(it, dict):
+        return out, False
+    valid = True
+    for item in obj:
+        if not isinstance(item, dict):
+            valid = False
             continue
-        cat = str(it.get("category", "")).strip()
-        if cat not in SCREEN_CATEGORIES:
+        category = item.get("category")
+        if not isinstance(category, str) or category.strip() not in SCREEN_CATEGORIES:
+            valid = False
             continue
         try:
-            s, e = float(_num_str(it.get("start"))), float(_num_str(it.get("end")))
-        except (TypeError, ValueError):
+            start = float(_num_str(item.get("start")))
+            end = float(_num_str(item.get("end")))
+            if not math.isfinite(start) or not math.isfinite(end) or end < start:
+                raise ValueError("invalid screen interval")
+        except (TypeError, ValueError, OverflowError):
+            valid = False
             continue
-        s, e = max(t_min, min(s, e)), min(t_max, max(s, e))
-        if e >= s:
-            out.append((cat, s, e))
-    return out
+        start, end = max(t_min, start), min(t_max, end)
+        if end < start:
+            valid = False
+            continue
+        out.append((category.strip(), start, end))
+    return out, valid
 
 
-def _num_str(v) -> str:
-    if isinstance(v, (int, float)):
-        return str(v)
-    m = re.search(r"-?\d+(?:\.\d+)?", str(v))
-    if not m:
-        raise ValueError(v)
-    return m.group(0)
+def parse_screen(
+    text: str, t_min: float, t_max: float
+) -> list[tuple[str, float, float]]:
+    """Compatibility parser; coverage decisions must use parse_screen_checked."""
+    return parse_screen_checked(text, t_min, t_max)[0]
+
+
+def _num_str(value) -> str:
+    if isinstance(value, bool):
+        raise ValueError("boolean time")
+    if isinstance(value, (int, float)):
+        return str(value)
+    if not isinstance(value, str):
+        raise ValueError("invalid time")
+    match = re.fullmatch(
+        r"\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s*(?:s|sec|seconds)?\s*",
+        value,
+        re.IGNORECASE,
+    )
+    if match is None:
+        raise ValueError("invalid time string")
+    return match.group(1)

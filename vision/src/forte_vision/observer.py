@@ -215,6 +215,9 @@ def analyze_video(
     t0 = time.monotonic()
     windows = _windows(dur, prof.screen_window_sec, prof.screen_overlap_sec) if prof.screen else []
     covered_until = 0.0 if prof.screen else dur
+    invalid_screen_windows = 0
+    empty_screen_windows = 0
+    valid_screen_windows = 0
     if prof.screen:
         screen_frames = list(src.sample(fps=prof.screen_fps, size=prof.screen_size))
         pts_pool.extend(t for t, _ in screen_frames)
@@ -223,13 +226,21 @@ def analyze_video(
             if time.monotonic() > deadline:
                 break
             frames = [(t, im) for t, im in screen_frames if ws - 1e-6 <= t < we]
-            if frames:
-                ans = backend.ask(frames, q_screen, max_tokens=200)
-                for cat, s, e in predicates.parse_screen(ans.text, ws, we):
-                    cands.extend(_split(_Cand(s, max(e, s), (s + e) / 2, {"vlm"}, 2.0, {f"screen:{cat}"}),
-                                        prof.max_candidate_sec))
+            if not frames:
+                empty_screen_windows += 1
+                continue
+            ans = backend.ask(frames, q_screen, max_tokens=200)
+            parsed, valid = predicates.parse_screen_checked(ans.text, ws, we)
+            for cat, s, e in parsed:
+                cands.extend(_split(_Cand(s, e, (s + e) / 2, {"vlm"}, 2.0, {f"screen:{cat}"}),
+                                    prof.max_candidate_sec))
+            if not valid:
+                invalid_screen_windows += 1
+                continue
+            valid_screen_windows += 1
             covered_until = we
-    coverage_complete = covered_until >= dur - 1e-6
+    coverage_complete = (covered_until >= dur - 1e-6 and invalid_screen_windows == 0
+                         and empty_screen_windows == 0)
     mark("screen", t0)
 
     # 4–5. объединение и отбор
@@ -314,6 +325,11 @@ def analyze_video(
         "stage_timings": timings,
         "vlm": asdict(backend.stats),
         "screen_windows": len(windows),
+        "valid_screen_windows": valid_screen_windows,
+        "invalid_screen_windows": invalid_screen_windows,
+        "empty_screen_windows": empty_screen_windows,
+        "pool_selected_count": len(selected),
+        "pool_dropped_count": len(pool) - len(selected),
         "screen_covered_until": round(covered_until, 3),
         "pool_size": len(pool),
         "raw_candidates": len(cands),
