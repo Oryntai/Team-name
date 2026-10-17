@@ -61,15 +61,20 @@ class AnchoredAnalyzer:
         t0 = time.monotonic()
         deadline = t0 + max(10.0, context.deadline_at - time.time() - self.reserve)
 
+        share = {"end": deadline}
+
         def share_end() -> float:
-            """Доля этого ролика (monotonic): ролики, загруженные вместе, делят одно окно в 5 минут."""
+            """Доля этого ролика (monotonic): ролики, загруженные вместе, делят одно окно в 5 минут.
+            Конец доли только сокращается (подъехали новые ролики) и никогда не отодвигается: пересчёт «части
+            остатка» от текущего момента иначе продлевал бы его на каждом этапе, и залп снова не укладывался."""
             if self.time_share is None:
                 return deadline
             try:
                 soft = float(self.time_share(context.deadline_at))
             except Exception:
-                return deadline
-            return min(deadline, time.monotonic() + soft - time.time())
+                return share["end"]
+            share["end"] = min(share["end"], time.monotonic() + soft - time.time())
+            return share["end"]
 
         _forget(self.asker)  # ответы по прошлому ролику в памяти процесса не держим
         src = VideoIOSource(video, context.video_path)
@@ -80,9 +85,9 @@ class AnchoredAnalyzer:
         # 1) плотный проход детектора не дольше трети доли ролика
         # детектору — треть доли, но не больше, чем остаётся после зон, стола и хотя бы одной пачки вопросов
         # (~30 с): при залпе иначе он съедал долю целиком и вопросов уже не оставалось
-        share = share_end() - t0
+        budget = share_end() - t0
         scan = dense_scan(path, fps=self.scan_fps, detector=self.detector,
-                          deadline=t0 + min(0.35 * share, max(3.0, share - SCAN_RESERVE_SEC)))
+                          deadline=t0 + min(0.35 * budget, max(3.0, budget - SCAN_RESERVE_SEC)))
         timings["t_scan"] = round(time.monotonic() - t0, 2)
 
         # 2) зоны: 2–4 вопроса модели на ролик

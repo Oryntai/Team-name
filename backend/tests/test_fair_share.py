@@ -54,3 +54,13 @@ def test_store_lists_only_waiting_jobs_earliest_first(tmp_path):
     assert store.queued_deadlines() == sorted([now + 301, now + 302, now + 303])
     store.claim()  # "a" ушёл в работу и больше не ждёт
     assert store.queued_deadlines() == [now + 302, now + 303]
+
+
+def test_recomputing_later_moves_the_end_so_the_analyzer_keeps_the_first_one():
+    # «пятая часть остатка» через 40 с снова даёт почти столько же: конец уезжает вперёд. Поэтому анализатор
+    # берёт минимум из пересчётов (forte_vision.anchored.analyzer, share_end), а не последний пересчёт.
+    queued = [300.0] * 4
+    first = fair_share_end(15.0, 300.0, queued)
+    later = fair_share_end(55.0, 300.0, queued)
+    assert later > first
+    assert min(first, later) == first
