@@ -28,6 +28,7 @@ PREDICATE = {
     "FOOD": "food_or_drink_at_desk",
     "KEYS": "keys_left_in_safe_lock",  # выдаётся, только если правило есть в загруженном каталоге
     "QUE": "served_out_of_queue",
+    "BAG": "collection_bag_left_uncounted",
 }
 
 Q = {
@@ -178,6 +179,18 @@ def plan(people: People, zones: Zones, dur: float, *, known_predicates: set[str]
         if allow("KEYS"):
             probes.append(Probe("KEYS", t_main, _items("KEYS", "safe", z.get("safe"), ts[:2], "safe_key", dur, zoom=6.0),
                                 t_start=t_main, t_end=_clip(ts[1], dur), reason="ключ в замке после ухода"))
+        # 1б) Ценность так и лежит на столе после ухода: пятно появилось до ухода и не исчезло. Что это — по плотной
+        #     вырезке: когда положили (OBJi@) и уже без кассира (OBJix@). X-15 — зелёный инкассаторский мешок, X-13 —
+        #     пачка купюр; широкий вопрос «есть ли на столе ценности» по всему столу их не видел (0 «да» из 3).
+        for i, (b, its) in enumerate(blob_items(blobs or [], dur)):
+            if not its or b.t_on > gone - 0.5 or b.t_off < min(gone + 1.0, dur - 0.5):
+                continue
+            after = _items(f"OBJ{i}x", "desk", its[0].box, [min(gone + 1.0, max(gone, hi - 0.2))], "desk_obj", dur)
+            for check, want in (("LEAVE", ("cash", "documents")), ("BAG", ("cash_bag",))):
+                if allow(check):
+                    probes.append(Probe(check, t_main, its + after, need_yes=2, t_start=t_main,
+                                        t_end=_clip(gone + 1.0, dur), want=want,
+                                        reason=f"на столе осталось после ухода кассира в {e.t:.1f} с"))
 
     # 2) Кассир вошла: дверь за собой, личные вещи на столе.
     for e in [e for e in ev if e.kind in ("cashier_enters", "cashier_sits")]:

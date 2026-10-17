@@ -86,3 +86,29 @@ def test_fragments_of_one_object_are_merged():
     m = _merge(parts)
     assert len(m) == 3  # один предмет из трёх кусков + другой предмет рядом по времени + тот же стол позже
     assert m[0].t_on == 13.8 and m[0].t_off == 17.0 and m[0].box == (0.30, 0.46, 0.34, 0.49)
+
+
+def test_valuable_left_on_desk_after_cashier_left():
+    """X-15: зелёный мешок лежит с 5.4 до конца, кассир ушла в 15 -> BAG; убранная до ухода пачка — не нарушение."""
+    from forte_vision.anchored.types import DeskBlob, Event, Track
+    cashier = Track(tid=1, t=[0.0, 15.0], boxes=[(0.4, 0.3, 0.55, 0.55)] * 2, conf=[0.9, 0.9])
+    ev = [Event("cashier_leaves", 15.0, meta={"t_exit": 17.0})]
+    people = People(cashier=cashier, cashier_present=[(0.0, 15.0)], visits=[], visitors=[], desk_dir=1, events=ev)
+    z = Zones(boxes={"desk": DESK})
+    bag = DeskBlob(box=(0.3, 0.46, 0.36, 0.5), t_on=5.4, t_off=20.4, area=1e-3)
+    gone_cash = DeskBlob(box=(0.5, 0.46, 0.53, 0.48), t_on=6.0, t_off=12.0, area=4e-4)  # убрала в сейф до ухода
+    probes = decide.plan(people, z, 20.4, blobs=[bag, gone_cash])
+    keys = [it.key for it in decide.all_items(probes)]
+    assert any(k.startswith("OBJ0x@") for k in keys) and not any(k.startswith("OBJ1x@") for k in keys)
+    ans = {k: CropAnswer(k, "no") for k in keys}
+    for k in keys:
+        if k.startswith(("OBJ0@", "OBJ0x@")):
+            ans[k] = CropAnswer(k, "cash_bag", note="green cloth bag")
+        if k.startswith("OBJ1@"):
+            ans[k] = CropAnswer(k, "cash")
+    found = decide.judge(probes, ans)
+    assert [(f.check, f.t_main) for f in found] == [("BAG", 14.5)]
+    for k in keys:  # тот же предмет — «другое» (подлокотник, телефон): не нарушение
+        if k.startswith(("OBJ0@", "OBJ0x@")):
+            ans[k] = CropAnswer(k, "other")
+    assert decide.judge(probes, ans) == []
