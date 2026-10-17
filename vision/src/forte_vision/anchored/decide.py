@@ -259,7 +259,8 @@ def plan(people: People, zones: Zones, dur: float, *, known_predicates: set[str]
             probes.append(Probe("QUE", t_main, [], t_start=e.t, t_end=_clip(e.t_end if e.t_end else t_main, dur),
                                 reason=f"второй посетитель у стола во время визита с {e.t:.1f} с", fixed=True))
 
-    # 4) Клиент ушёл, кассир осталась: пересчёт без клиента (только если до ухода не считали).
+    # 4) Клиент ушёл, кассир осталась и всё ещё считает: пересчёт без клиента. Считала ли она до ухода — не важно:
+    #    X-34 (нарушение) и чистый X-35 оба считают при клиенте, разница — продолжается ли счёт после его ухода.
     for e in [e for e in ev if e.kind == "client_leaves"]:
         if e.t > dur - 2.0 or not _present(people, e.t + 2.0):
             continue
@@ -269,7 +270,6 @@ def plan(people: People, zones: Zones, dur: float, *, known_predicates: set[str]
         if allow("NOCLIENT"):
             probes.append(Probe("NOCLIENT", e.t + 1.5,
                                 _items("NOCL", "counter", z.get("counter"), [e.t + 1.5, e.t + 4.0], "counting", dur),
-                                veto=_items("NOCLpre", "counter", z.get("counter"), [e.t - 2.0], "counting", dur),
                                 t_start=e.t, t_end=_clip(e.t + 4.0, dur), reason="пересчёт после ухода клиента"))
 
     # 5) Состояния без события людей: сейф открыт при кассире не у сейфа, вещи и еда на столе.

@@ -193,3 +193,13 @@ def test_open_safe_after_sitting_down_only_counts_if_she_stays_seated():
     back_up = decide.plan(_people(went + [Event("cashier_stands", 40.0)]), Z, 60.0)  # встала закрыть сейф (X-19)
     assert any(p.check == "SAFE" and p.reason.startswith("сейф после возвращения") for p in stays)
     assert not any(p.check == "SAFE" and p.reason.startswith("сейф после возвращения") for p in back_up)
+
+
+def test_counting_on_after_the_client_left_is_a_violation_even_if_it_began_with_the_client():
+    # X-34: считала при клиенте и продолжила после его ухода; X-35 (чисто) после ухода уже не считает
+    ev = [Event("client_arrives", 5.6), Event("client_leaves", 11.2)]
+    probes = decide.plan(_people(ev), Z, 30.0)
+    nocl = next(p for p in probes if p.check == "NOCLIENT")
+    assert not nocl.veto
+    answers = {it.key: CropAnswer(it.key, "yes") for it in decide.all_items(probes) if it.key.startswith("NOCL")}
+    assert [f.check for f in decide.judge(probes, answers) if f.check == "NOCLIENT"] == ["NOCLIENT"]
