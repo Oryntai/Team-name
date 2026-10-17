@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.mov
+*.mp4
+frames/
+runs/
+*.egg-info/

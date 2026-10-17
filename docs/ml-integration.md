@@ -57,3 +57,19 @@ python -m pytest -q backend/tests decision/tests data_tools rules/test_catalog.p
 FFmpeg/ffprobe должны быть в PATH либо заданы в FORTE_FFMPEG_BIN/FORTE_FFPROBE_BIN. Тесты decision используют синтетическое видео, настоящий worker/VideoIO и декодирование JPEG. Они проверяют интеграцию, не качество VLM. Реальный baseline публикуется только после запуска реальной модели.
 
 Docker пока требует включения decision, каталога, runtime vision и локальных весов; нативная установка выше уже поддерживает rules-фабрику. Сам факт наличия пакетов не означает готовность analyzer.
+
+## Локальный аудит пропусков
+
+Перед запуском worker можно задать `FORTE_LOCAL_AUDIT_DIR` на приватный локальный каталог. Observer запишет там наблюдения и интервалы кандидатов до/после отбора; файлы имеют хешированные имена и права 0600. Это содержимое не предназначено для коммита или передачи внешним AI. Без переменной аудит выключен.
+
+После HTTP-прогона:
+
+```sh
+python -m data_tools.aggregate_failures \
+  --predictions local_data/evaluation/predictions.json \
+  --gold local_data/evaluation/gold_subset.json \
+  --inventory local_data/inventory.json \
+  --output local_data/evaluation/aggregate.json
+```
+
+Вывод разделяет пропуски завершившегося классификатора и положительные видео, потерянные из-за ошибки выполнения. Метрики взвешивают все файлы; число уникальных SHA и конфликты дубликатов указаны отдельно. Точное и допустимое совпадение таймкодов считаются независимо. Latency p50/p95 остаётся в исходном `report.json` и включает все попытки.
