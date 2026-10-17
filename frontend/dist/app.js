@@ -28,8 +28,12 @@ import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, 
     apiHealthChecks: $("#api-health-checks"),
     apiCheckButton: $("#api-check-button"),
     apiBaseUrl: $("#api-base-url"),
-    apiRequestExample: $("#api-request-example"),
-    apiCopyRequest: $("#api-copy-request"),
+    apiExampleTabs: $$("[data-example-tab]"),
+    apiExamplePanels: $$("[data-example-panel]"),
+    apiExampleCurl: $("#api-example-curl"),
+    apiExamplePython: $("#api-example-python"),
+    apiExampleJavaScript: $("#api-example-javascript"),
+    apiCopyExample: $("#api-copy-example"),
     apiCopyMessage: $("#api-copy-message"),
     navItems: $$(".nav-item[data-view]"),
     activeSectionName: $("#active-section-name"),
@@ -128,6 +132,7 @@ import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, 
     originalVideoUnsupported: false,
     pendingVideoSeek: null,
     apiCheckRunning: false,
+    apiExampleLanguage: "curl",
   };
 
   function setSidebarOpen(open) {
@@ -751,13 +756,74 @@ import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, 
     // TODO(api-base-url): expose a safe runtime base URL only if a future deployment separates frontend and backend origins.
     const baseUrl = window.location.origin;
     elements.apiBaseUrl.textContent = baseUrl;
-    elements.apiRequestExample.textContent = [
-      'curl.exe -X POST "' + baseUrl + '/api/v1/analyze" `',
-      '  -H "X-API-Key: $env:FORTE_API_KEY" `',
-      '  -F "file=@C:/path/to/video.mov"',
-      '',
-      'curl.exe -H "X-API-Key: $env:FORTE_API_KEY" "' + baseUrl + '/api/v1/jobs/<job_id>"',
+    elements.apiExampleCurl.textContent = [
+      "# Bash: ключ вводится без отображения и не сохраняется в команде истории",
+      'read -rs -p "X-API-Key: " FORTE_API_KEY; export FORTE_API_KEY; printf "\\n"',
+      "API_BASE=" + JSON.stringify(baseUrl),
+      "",
+      'curl -H "X-API-Key: ${FORTE_API_KEY}" -F "file=@./video.mov" "${API_BASE}/api/v1/analyze"',
+      "# Скопируйте job_id из ответа выше",
+      'JOB_ID="<job_id>"',
+      'curl -H "X-API-Key: ${FORTE_API_KEY}" "${API_BASE}/api/v1/jobs/${JOB_ID}"',
+      "# Повторяйте GET раз в 1–2 секунды, пока status не станет done или failed",
     ].join("\n");
+    elements.apiExamplePython.textContent = [
+      "# python -m pip install requests",
+      "import json, os, time, requests",
+      "",
+      "BASE = " + JSON.stringify(baseUrl),
+      'HEADERS = {"X-API-Key": os.environ["FORTE_API_KEY"]}',
+      'with open("video.mov", "rb") as video:',
+      '    upload = requests.post(f"{BASE}/api/v1/analyze", headers=HEADERS, files={"file": ("video.mov", video, "video/quicktime")}, timeout=300)',
+      "upload.raise_for_status()",
+      'job_id = upload.json()["job_id"]',
+      "",
+      "while True:",
+      '    response = requests.get(f"{BASE}/api/v1/jobs/{job_id}", headers=HEADERS, timeout=15)',
+      "    response.raise_for_status()",
+      "    result = response.json()",
+      '    if result["status"] != "processing":',
+      "        print(json.dumps(result, ensure_ascii=False, indent=2))",
+      "        break",
+      "    time.sleep(1.5)",
+    ].join("\n");
+    elements.apiExampleJavaScript.textContent = [
+      'import { readFile } from "node:fs/promises";',
+      "",
+      "const BASE = " + JSON.stringify(baseUrl) + ";",
+      'const key = process.env.FORTE_API_KEY;',
+      'if (!key) throw new Error("Set FORTE_API_KEY before running this example");',
+      'const headers = { "X-API-Key": key };',
+      'const form = new FormData();',
+      'form.append("file", new Blob([await readFile("./video.mov")], { type: "video/quicktime" }), "video.mov");',
+      'const upload = await fetch(`${BASE}/api/v1/analyze`, { method: "POST", headers, body: form });',
+      'if (!upload.ok) throw new Error(`Upload failed (${upload.status}): ${await upload.text()}`);',
+      'const { job_id } = await upload.json();',
+      "let result;",
+      "do {",
+      '  const response = await fetch(`${BASE}/api/v1/jobs/${job_id}`, { headers });',
+      '  if (!response.ok) throw new Error(`Polling failed (${response.status}): ${await response.text()}`);',
+      "  result = await response.json();",
+      '  if (result.status === "processing") await new Promise((resolve) => setTimeout(resolve, 1500));',
+      '} while (result.status === "processing");',
+      "console.log(JSON.stringify(result, null, 2));",
+    ].join("\n");
+    activateApiExample("curl");
+  }
+
+  function activateApiExample(language, moveFocus = false) {
+    state.apiExampleLanguage = language;
+    elements.apiExampleTabs.forEach((tab) => {
+      const active = tab.dataset.exampleTab === language;
+      tab.classList.toggle("is-active", active);
+      tab.setAttribute("aria-selected", String(active));
+      tab.tabIndex = active ? 0 : -1;
+      if (active && moveFocus) tab.focus();
+    });
+    elements.apiExamplePanels.forEach((panel) => {
+      panel.hidden = panel.dataset.examplePanel !== language;
+    });
+    elements.apiCopyMessage.hidden = true;
   }
 
   function showApiHealth(stateName, title, message, checks = null) {
@@ -785,9 +851,9 @@ import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, 
       if (!isHealthResponse(payload)) {
         showApiHealth("response-error", "Ошибка ответа API", "Сервер ответил в неожиданном формате. Повторите проверку позже.");
       } else if (response.status === 200 && payload.status === "ready") {
-        showApiHealth("ready", "API доступен · сервис готов", "Health endpoint подтвердил готовность всех проверяемых компонентов.", payload.checks);
+        showApiHealth("ready", "API отвечает · сервис готов", "GET /health/ready подтвердил готовность всех проверяемых компонентов. Ключ жюри здесь не проверяется.", payload.checks);
       } else if (response.status === 503 && payload.status === "not_ready") {
-        showApiHealth("not-ready", "API отвечает, но не готов к анализу", "Backend вернул HTTP 503. Проверки ниже показывают, какие компоненты пока не готовы.", payload.checks);
+        showApiHealth("not-ready", "API отвечает, сервис не готов", "Backend вернул HTTP 503. Проверки ниже показывают, какие компоненты пока не готовы. Ключ жюри здесь не проверяется.", payload.checks);
       } else {
         showApiHealth("response-error", "Ошибка ответа API", `Неожиданный HTTP-статус: ${response.status}.`);
       }
@@ -803,12 +869,13 @@ import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, 
       state.apiCheckRunning = false;
       elements.apiHealth.removeAttribute("aria-busy");
       elements.apiCheckButton.disabled = false;
-      elements.apiCheckButton.textContent = "Проверить соединение";
+      elements.apiCheckButton.textContent = "Проверить сервис";
     }
   }
 
-  async function copyApiRequest() {
-    const text = elements.apiRequestExample.textContent;
+  async function copyApiExample() {
+    const activePanel = elements.apiExamplePanels.find((panel) => panel.dataset.examplePanel === state.apiExampleLanguage);
+    const text = activePanel?.querySelector("code")?.textContent || "";
     try {
       if (navigator.clipboard?.writeText && window.isSecureContext) {
         await navigator.clipboard.writeText(text);
@@ -824,7 +891,7 @@ import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, 
         temporary.remove();
         if (!copied) throw new Error("Clipboard unavailable");
       }
-      elements.apiCopyMessage.textContent = "Пример запроса скопирован. Укажите свой ключ в переменной FORTE_API_KEY.";
+      elements.apiCopyMessage.textContent = `Пример ${state.apiExampleLanguage} скопирован. Перед запуском задайте FORTE_API_KEY безопасно.`;
       elements.apiCopyMessage.hidden = false;
     } catch {
       elements.apiCopyMessage.textContent = "Не удалось скопировать автоматически. Выделите текст примера и скопируйте его вручную.";
@@ -845,6 +912,19 @@ import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, 
     if (view === "api") void checkApiConnection();
     setSidebarOpen(false);
   }));
+  elements.apiExampleTabs.forEach((tab, index) => {
+    tab.addEventListener("click", () => activateApiExample(tab.dataset.exampleTab));
+    tab.addEventListener("keydown", (event) => {
+      let nextIndex = index;
+      if (event.key === "ArrowRight") nextIndex = (index + 1) % elements.apiExampleTabs.length;
+      else if (event.key === "ArrowLeft") nextIndex = (index - 1 + elements.apiExampleTabs.length) % elements.apiExampleTabs.length;
+      else if (event.key === "Home") nextIndex = 0;
+      else if (event.key === "End") nextIndex = elements.apiExampleTabs.length - 1;
+      else return;
+      event.preventDefault();
+      activateApiExample(elements.apiExampleTabs[nextIndex].dataset.exampleTab, true);
+    });
+  });
   window.addEventListener("keydown", (event) => {
     if (!document.body.classList.contains("sidebar-open")) return;
     if (event.key === "Escape") {
@@ -888,7 +968,7 @@ import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, 
     startCheck(state.file);
   });
   elements.apiCheckButton.addEventListener("click", checkApiConnection);
-  elements.apiCopyRequest.addEventListener("click", copyApiRequest);
+  elements.apiCopyExample.addEventListener("click", copyApiExample);
   elements.newCheck.addEventListener("click", resetToUpload);
   elements.failureNewCheck.addEventListener("click", resetToUpload);
   elements.resumeCheck.addEventListener("click", resumeCheck);

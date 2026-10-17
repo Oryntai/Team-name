@@ -183,81 +183,82 @@
 
           <section id="api-view" class="view api-view" aria-labelledby="api-title" hidden>
             <div class="view-heading api-view-heading">
-              <div><p class="eyebrow">ИНТЕГРАЦИЯ</p><h1 id="api-title" tabindex="-1">API сервиса</h1><p class="intro-copy">Текущие адреса, авторизация и формат обмена по backend-контракту.</p></div>
+              <div><p class="eyebrow">ДЛЯ ПРОВЕРЯЮЩИХ</p><h1 id="api-title" tabindex="-1">API ForteBank</h1><p class="intro-copy">Короткий путь от доступа до результата проверки видео.</p></div>
             </div>
 
-            <section id="api-health" class="api-health" data-state="unchecked" aria-labelledby="api-health-heading">
-              <div class="api-health-copy">
-                <p class="eyebrow">СОСТОЯНИЕ СЕРВИСА</p>
-                <div class="api-health-status">
-                  <span class="api-status-marker" aria-hidden="true"></span>
-                  <div><h2 id="api-health-heading">Не проверено</h2><p id="api-health-message" role="status" aria-live="polite">Проверка выполнится при открытии этого раздела или по кнопке.</p></div>
+            <div class="api-overview">
+              <section id="api-health" class="api-health" data-state="unchecked" aria-labelledby="api-health-heading">
+                <div class="api-health-copy">
+                  <p class="eyebrow">СОСТОЯНИЕ СЕРВИСА</p>
+                  <div class="api-health-status">
+                    <span class="api-status-marker" aria-hidden="true"></span>
+                    <div><h2 id="api-health-heading">Не проверено</h2><p id="api-health-message" role="status" aria-live="polite">Проверка выполнится при открытии этого раздела или по кнопке.</p></div>
+                  </div>
+                  <ul id="api-health-checks" class="api-health-checks" aria-label="Проверки готовности" hidden>
+                    <li><span>База данных</span><strong data-check="database"></strong></li>
+                    <li><span>Инструменты видео</span><strong data-check="video_tools"></strong></li>
+                    <li><span>Анализаторы настроены</span><strong data-check="plugins_configured"></strong></li>
+                    <li><span>Фоновый обработчик</span><strong data-check="worker"></strong></li>
+                    <li><span>Модель готова</span><strong data-check="model_ready"></strong></li>
+                  </ul>
                 </div>
-                <ul id="api-health-checks" class="api-health-checks" aria-label="Проверки готовности" hidden>
-                  <li><span>База данных</span><strong data-check="database"></strong></li>
-                  <li><span>Инструменты видео</span><strong data-check="video_tools"></strong></li>
-                  <li><span>Анализаторы настроены</span><strong data-check="plugins_configured"></strong></li>
-                  <li><span>Фоновый обработчик</span><strong data-check="worker"></strong></li>
-                  <li><span>Модель готова</span><strong data-check="model_ready"></strong></li>
-                </ul>
-              </div>
-              <button id="api-check-button" class="button button-secondary api-check-button" type="button">Проверить соединение</button>
-            </section>
+                <button id="api-check-button" class="button button-secondary api-check-button" type="button">Проверить сервис</button>
+              </section>
 
-            <div class="api-base-row">
-              <div><span class="api-label">Текущий base URL</span><code id="api-base-url"></code></div>
-              <p>Адрес взят из origin открытого приложения; отдельная настройка API host в проекте не задана.</p>
+              <div class="api-origin">
+                <span class="api-label">BASE URL</span>
+                <code id="api-base-url"></code>
+                <p>Совпадает с адресом этого сайта.</p>
+              </div>
             </div>
 
-            <section class="api-section" aria-labelledby="api-routes-title">
-              <div class="api-section-heading"><div><h2 id="api-routes-title">Маршруты</h2><p>Проверка соединения выше использует безопасный GET без ключа.</p></div></div>
-              <div class="api-endpoints">
-                <article class="api-endpoint">
-                  <div class="api-endpoint-path"><span class="api-method api-method-get">GET</span><code>/health/live</code></div>
-                  <p>Проверка, что процесс API отвечает. Авторизация не требуется; ответ: <code>{"status":"ok"}</code>.</p>
-                </article>
-                <article class="api-endpoint">
-                  <div class="api-endpoint-path"><span class="api-method api-method-get">GET</span><code>/health/ready</code></div>
-                  <p>Готовность сервиса: JSON с полями <code>status</code> и <code>checks</code> (<code>database</code>, <code>video_tools</code>, <code>plugins_configured</code>, <code>worker</code>, <code>model_ready</code>; все значения — boolean). Возвращает HTTP 200 при <code>ready</code> и HTTP 503 при <code>not_ready</code>; ключ не нужен. Кнопка «Проверить соединение» вызывает этот маршрут. Проверка не подтверждает наличие ключа жюри.</p>
-                </article>
-                <article class="api-endpoint">
-                  <div class="api-endpoint-path"><span class="api-method api-method-post">POST</span><code>/ui-api/analyze</code></div>
-                  <p>Загрузка из интерфейса без ключа: <code>multipart/form-data</code>, поле <code>file</code> с расширением <code>.mov</code>. При успехе HTTP 200 и <code>job_id</code>; ошибки загрузки HTTP 400/413/415, заполненная очередь — HTTP 503.</p>
-                </article>
-                <article class="api-endpoint">
-                  <div class="api-endpoint-path"><span class="api-method api-method-get">GET</span><code>/ui-api/jobs/{job_id}</code></div>
-                  <p>Статус задания из интерфейса без ключа: HTTP 200 с <code>processing</code>, <code>failed</code> или <code>done</code> и полями результата. Несуществующее задание возвращает HTTP 404.</p>
-                </article>
-                <article class="api-endpoint">
-                  <div class="api-endpoint-path"><span class="api-method api-method-post">POST</span><code>/api/v1/analyze</code><span class="api-auth-tag">X-API-Key</span></div>
-                  <p>Защищённый маршрут для проверяющих. Нужен заголовок <code>X-API-Key</code>; формат загрузки и ответ с <code>job_id</code> совпадают с <code>/ui-api/analyze</code>.</p>
-                </article>
-                <article class="api-endpoint">
-                  <div class="api-endpoint-path"><span class="api-method api-method-get">GET</span><code>/api/v1/jobs/{job_id}</code><span class="api-auth-tag">X-API-Key</span></div>
-                  <p>Защищённое получение статуса задания с заголовком <code>X-API-Key</code>; формат ответа совпадает с <code>/ui-api/jobs/{job_id}</code>.</p>
-                </article>
-              </div>
+            <section class="api-key-note" aria-labelledby="api-key-heading">
+              <span class="api-key-state" aria-hidden="true">i</span>
+              <!-- TODO(jury-demo-access): backend owner must define a separately scoped, rate-limited, expiring reviewer credential before adding self-service demo access. Never expose FORTE_API_KEY in browser code. -->
+              <div><h2 id="api-key-heading">Ключ жюри: не проверен</h2><p>Проверка сервиса выше вызывает <code>GET /health/ready</code> без ключа. Она подтверждает готовность компонентов, но не проверяет ваш <code>X-API-Key</code>. Для доступа к API жюри запросите ключ у организатора; публичная выдача demo-ключа не предусмотрена.</p></div>
             </section>
 
-            <section class="api-section" aria-labelledby="api-access-title">
-              <div class="api-section-heading"><div><h2 id="api-access-title">Доступ и ограничения</h2><p>Ключ жюри — секрет сервера, frontend его не получает.</p></div></div>
-              <!-- TODO(jury-demo-key): render a key only if backend later exposes a separately scoped public demo-key endpoint; never read FORTE_API_KEY in the browser. -->
-              <p class="api-access-note">Для маршрутов <code>/api/v1/*</code> нужен заголовок <code>X-API-Key</code>; при отсутствующем или неверном ключе backend возвращает HTTP 401, а если ключ не настроен на сервере — HTTP 503. Backend не выдаёт публичный demo-ключ; получите ключ для проверяющих по согласованному закрытому каналу. UI-маршруты <code>/ui-api/*</code> работают без него.</p>
-              <!-- TODO(api-upload-limit): expose effective max_upload_mb through a safe public config response before showing a deployment-specific value. -->
-              <p class="api-limit-note"><strong>Загрузка:</strong> принимаются файлы <code>.mov</code>. Настройка backend по умолчанию — 64 МиБ; фактический предел задаётся на сервере через <code>FORTE_MAX_UPLOAD_MB</code> и публичным endpoint не раскрывается.</p>
-            </section>
-
-            <section class="api-section api-examples" aria-labelledby="api-examples-title">
-              <div class="api-section-heading"><div><h2 id="api-examples-title">Примеры по контракту</h2><p>Подстановочные значения ниже не являются реальными ключами, заданиями или результатами анализа.</p></div></div>
-              <div class="api-example-block">
-                <div class="api-example-heading"><h3>Загрузить видео в API проверяющих</h3><button id="api-copy-request" class="text-button" type="button">Скопировать запрос</button></div>
-                <pre class="api-code"><code id="api-request-example"></code></pre>
+            <section id="api-quickstart" class="api-section api-quickstart" aria-labelledby="api-quickstart-title">
+              <div class="api-section-heading"><div><p class="eyebrow">3 ШАГА</p><h2 id="api-quickstart-title">Быстрый старт</h2><p>Загрузите MOV, сохраните <code>job_id</code> и опрашивайте его до готового результата.</p></div></div>
+              <ol class="api-steps">
+                <li><span>1</span><div><strong>Получите ключ</strong><p>Передайте его только через переменную окружения. Не вставляйте ключ в код или публичные примеры.</p></div></li>
+                <li><span>2</span><div><strong>Загрузите видео</strong><p><code>POST /api/v1/analyze</code> · <code>multipart/form-data</code> · поле <code>file</code> · формат MOV.</p></div></li>
+                <li><span>3</span><div><strong>Дождитесь результата</strong><p>Проверяйте <code>GET /api/v1/jobs/{job_id}</code> раз в 1–2 секунды: <code>processing</code> сменится на <code>done</code> или <code>failed</code>.</p></div></li>
+              </ol>
+              <div class="api-example-block api-quick-example">
+                <div class="api-example-heading"><div><h3>Запуск целиком</h3><p>Выберите язык; ключ и путь к ролику задаются локально.</p></div><button id="api-copy-example" class="button button-secondary" type="button">Копировать пример</button></div>
+                <div class="api-tabs" role="tablist" aria-label="Язык примера API">
+                  <button id="api-tab-curl" class="api-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="api-panel-curl" tabindex="0" data-example-tab="curl">cURL · Bash</button>
+                  <button id="api-tab-python" class="api-tab" type="button" role="tab" aria-selected="false" aria-controls="api-panel-python" tabindex="-1" data-example-tab="python">Python</button>
+                  <button id="api-tab-javascript" class="api-tab" type="button" role="tab" aria-selected="false" aria-controls="api-panel-javascript" tabindex="-1" data-example-tab="javascript">JavaScript</button>
+                </div>
+                <div id="api-panel-curl" class="api-tab-panel" role="tabpanel" aria-labelledby="api-tab-curl" data-example-panel="curl">
+                  <pre class="api-code"><code id="api-example-curl"></code></pre>
+                </div>
+                <div id="api-panel-python" class="api-tab-panel" role="tabpanel" aria-labelledby="api-tab-python" data-example-panel="python" hidden>
+                  <pre class="api-code"><code id="api-example-python"></code></pre>
+                  <p class="api-example-note">Требуется пакет <code>requests</code>: установите командой <code>python -m pip install requests</code>. Перед запуском задайте <code>FORTE_API_KEY</code> в окружении.</p>
+                </div>
+                <div id="api-panel-javascript" class="api-tab-panel" role="tabpanel" aria-labelledby="api-tab-javascript" data-example-panel="javascript" hidden>
+                  <pre class="api-code"><code id="api-example-javascript"></code></pre>
+                  <p class="api-example-note">Требуется Node.js 18 или новее (встроенные <code>fetch</code> и <code>FormData</code>). Сохраните пример как <code>api-check.mjs</code>, задайте <code>FORTE_API_KEY</code> в окружении и запустите <code>node api-check.mjs</code>.</p>
+                </div>
                 <p id="api-copy-message" class="api-copy-message" role="status" aria-live="polite" hidden></p>
-                <p class="api-example-note">Перед запросами задайте переменную <code>FORTE_API_KEY</code> значением, полученным по закрытому каналу; frontend не запрашивает ключ. Ответ загрузки: <code>{"job_id":"&lt;job_id&gt;"}</code>. Затем опрашивайте <code>GET /api/v1/jobs/{job_id}</code> до статуса <code>done</code> или <code>failed</code>.</p>
+                <p class="api-example-note">Для Python и Node.js задайте <code>FORTE_API_KEY</code> в окружении до запуска; значение не записывается в исходник. В Bash можно скрыто запросить ключ командой из примера cURL.</p>
               </div>
-              <div class="api-example-block api-response-example">
-                <div class="api-example-heading"><h3>Форма завершённого ответа</h3></div>
-                <pre class="api-code"><code>{
+            </section>
+
+            <section class="api-section" aria-labelledby="api-methods-title">
+              <div class="api-section-heading"><div><p class="eyebrow">HTTP API</p><h2 id="api-methods-title">Методы API жюри</h2><p>Внешние маршруты для интеграции; каждый защищён заголовком <code>X-API-Key</code>.</p></div></div>
+              <article id="api-analyze" class="api-route">
+                <div class="api-route-heading"><div class="api-endpoint-path"><span class="api-method api-method-post">POST</span><code>/api/v1/analyze</code><span class="api-auth-tag">X-API-Key</span></div><p>Загружает видеозапись в очередь анализа.</p></div>
+                <dl class="api-route-facts"><div><dt>Параметры</dt><dd>Заголовок <code>X-API-Key</code>; multipart-поле <code>file</code> с файлом <code>.mov</code>.</dd></div><div><dt>Ограничение</dt><dd>Backend default — 64 МиБ. Фактический лимит задаётся на сервере через <code>FORTE_MAX_UPLOAD_MB</code>; API не публикует его текущее значение.</dd></div><div><dt>Успешный ответ · HTTP 200</dt><dd><code>{"job_id":"&lt;job_id&gt;"}</code></dd></div></dl>
+                <details class="api-errors"><summary>Ошибки загрузки</summary><ul><li><code>400</code> — пустой файл.</li><li><code>401</code> — ключ отсутствует или неверен.</li><li><code>408</code> — загрузка не уложилась в deadline.</li><li><code>413</code> — превышен настроенный сервером предел размера.</li><li><code>415</code> — расширение файла не <code>.mov</code>.</li><li><code>503</code> — ключ не настроен на сервере или очередь заполнена; при заполненной очереди сервер добавляет <code>Retry-After: 5</code>.</li></ul></details>
+              </article>
+              <article id="api-job" class="api-route">
+                <div class="api-route-heading"><div class="api-endpoint-path"><span class="api-method api-method-get">GET</span><code>/api/v1/jobs/{job_id}</code><span class="api-auth-tag">X-API-Key</span></div><p>Возвращает состояние задания или завершённый результат.</p></div>
+                <dl class="api-route-facts"><div><dt>Параметры</dt><dd>Заголовок <code>X-API-Key</code>; <code>job_id</code> — путь из ответа загрузки.</dd></div><div><dt>HTTP 200 · выполняется</dt><dd><code>{"job_id":"&lt;job_id&gt;","status":"processing"}</code></dd></div><div><dt>HTTP 200 · ошибка обработки</dt><dd><code>{"job_id":"&lt;job_id&gt;","status":"failed"}</code></dd></div></dl>
+                <div class="api-result-shape"><h3>HTTP 200 · завершённый ответ</h3><pre class="api-code"><code>{
   "job_id": "&lt;job_id&gt;",
   "status": "done",
   "verdict": "violation",
@@ -270,10 +271,30 @@
       "image_base64": "&lt;JPEG в base64&gt;"
     }]
   }]
-}</code></pre>
-                <p class="api-example-note">Это только схема полей. Фактические значения и число эпизодов определяет backend; <code>failed</code> не означает отсутствие нарушений.</p>
-              </div>
+}</code></pre><p class="api-example-note">При <code>no_violation</code> поле <code>violations</code> — пустой массив. Статус <code>failed</code> означает незавершённую проверку, а не отсутствие нарушений.</p></div>
+                <details class="api-errors"><summary>Ошибки получения результата</summary><ul><li><code>401</code> — ключ отсутствует или неверен.</li><li><code>404</code> — задание с таким ID не найдено.</li><li><code>503</code> — ключ жюри не настроен на сервере.</li></ul></details>
+              </article>
             </section>
+
+            <section class="api-section" aria-labelledby="api-health-methods-title">
+              <div class="api-section-heading"><div><p class="eyebrow">БЕЗ АВТОРИЗАЦИИ</p><h2 id="api-health-methods-title">Состояние сервиса</h2><p>Эти маршруты не проверяют ключ и не создают задание.</p></div></div>
+              <div class="api-health-routes"><article><div class="api-endpoint-path"><span class="api-method api-method-get">GET</span><code>/health/live</code></div><p>Отвечает, если процесс API работает. Успешный ответ: HTTP 200 · <code>{"status":"ok"}</code>.</p></article><article><div class="api-endpoint-path"><span class="api-method api-method-get">GET</span><code>/health/ready</code></div><p>Проверяет базу, видеоинструменты, конфигурацию анализаторов, worker и модель. HTTP 200 при <code>ready</code>; HTTP 503 при <code>not_ready</code>. Это проверка готовности сервиса, не API-ключа.</p><details class="api-errors"><summary>Формат ответа</summary><pre class="api-code"><code>{
+  "status": "ready",
+  "checks": {
+    "database": true,
+    "video_tools": true,
+    "plugins_configured": true,
+    "worker": true,
+    "model_ready": true
+  }
+}</code></pre></details></article></div>
+            </section>
+
+            <details class="api-internal-routes">
+              <summary>Внутренние маршруты веб-интерфейса</summary>
+              <p>Префикс <code>/ui-api/*</code> нужен только браузерному приложению, работает без ключа и ограничен общей очередью сервиса. Внешним интеграциям используйте маршруты <code>/api/v1/*</code>.</p>
+              <ul><li><code>POST /ui-api/analyze</code> — загрузка видео из интерфейса.</li><li><code>GET /ui-api/jobs/{job_id}</code> — опрос статуса задания из интерфейса.</li></ul>
+            </details>
           </section>
 
           <section id="failure-view" class="view status-view" aria-labelledby="failure-title" hidden>
