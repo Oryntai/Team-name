@@ -1,4 +1,4 @@
-name: Backend checks
+name: Backend and decision checks
 
 on:
   push:
@@ -24,6 +24,7 @@ jobs:
           cache: pip
           cache-dependency-path: |
             pyproject.toml
+            decision/pyproject.toml
             requirements.lock
 
       - name: Install local video tools
@@ -34,7 +35,7 @@ jobs:
           ffprobe -version
 
       - name: Install backend and test dependencies
-        run: python -m pip install -c requirements.lock -e '.[dev]'
+        run: python -m pip install -c requirements.lock -e '.[dev]' -e './decision[dev]'
 
-      - name: Run synthetic backend tests
-        run: python -m pytest
+      - name: Run synthetic backend and decision tests
+        run: python -m pytest backend/tests decision/tests data_tools/test_inventory.py rules/test_catalog.py

@@ -1,0 +1,1 @@
+[{"video_id":"synthetic-video","verdict":"violation","exhaustive":true,"events":[{"type":"synthetic_marker","rule_id":"SYNTHETIC-001","timecode_sec":3.5}]}]
