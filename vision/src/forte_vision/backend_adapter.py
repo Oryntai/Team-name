@@ -9,6 +9,7 @@ PIL декодирует оригинальный JPEG и уменьшает к�
 локального сервера и FORTE_VLM_KEY_FILE), FORTE_VLM_MODEL, FORTE_DETECTOR
 (none | nano | small | medium), FORTE_VISION_PROFILE (fast | full; иначе context.profile, если он
 совпадает с именем профиля), FORTE_VISION_RESERVE_SEC — запас до дедлайна на правила и JPEG.
+Профили legacy_* сервису недоступны: их предикаты не покрыты каталогом rules/cash_checks.json.
 """
 
 from __future__ import annotations
@@ -25,6 +26,20 @@ from .observer import PROFILES, analyze_video
 from .video import VideoInfo
 
 VALID_SOURCES = {"vlm", "motion", "detector"}
+# Профили, чьи предикаты совпадают с каталогом правил по умолчанию (timeline.CHECKS <-> cash_checks.json).
+SERVICE_PROFILES = frozenset(name for name, p in PROFILES.items() if p.timeline)
+
+
+def _service_profile(requested: str | None) -> str:
+    """Профиль из FORTE_VISION_PROFILE / context.profile. Явно заданный неподходящий — ошибка конфигурации."""
+    configured = os.environ.get("FORTE_VISION_PROFILE")
+    if configured:
+        if configured not in SERVICE_PROFILES:
+            raise ValueError(
+                f"FORTE_VISION_PROFILE={configured!r} is not a service profile; use one of {sorted(SERVICE_PROFILES)}"
+            )
+        return configured
+    return requested if requested in SERVICE_PROFILES else "fast"
 
 
 def _bounded_observer_time(value: float, duration: float) -> float:
@@ -175,6 +190,7 @@ class VisionAnalyzer:
 
             self.detector = Detector(det)
         self.reserve = float(os.environ.get("FORTE_VISION_RESERVE_SEC", "20"))
+        _service_profile(None)  # неверный FORTE_VISION_PROFILE — ошибка при старте, а не на первом ролике
 
     def analyze(self, context, video):
         from backend.contracts import (
@@ -183,9 +199,7 @@ class VisionAnalyzer:
             ObservedEvent,
         )
 
-        prof = os.environ.get("FORTE_VISION_PROFILE") or (
-            context.profile if context.profile in PROFILES else "fast"
-        )
+        prof = _service_profile(context.profile)
         budget = context.deadline_at - time.time() - self.reserve
         if budget <= 0:
             raise IncompleteAnalysis("no time left for analysis before the deadline")

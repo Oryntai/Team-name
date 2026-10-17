@@ -276,3 +276,14 @@ def test_rounded_observer_boundary_passes_exact_worker_guard(
 def test_observer_boundary_rejects_genuine_or_nonrounded_overshoot(value):
     with pytest.raises(ValueError):
         backend_adapter._bounded_observer_time(value, 1.23456)
+
+
+def test_service_rejects_profiles_without_catalog_coverage(monkeypatch):
+    import pytest
+
+    monkeypatch.setenv("FORTE_VISION_PROFILE", "legacy_fast")
+    with pytest.raises(ValueError, match="legacy_fast"):
+        backend_adapter._service_profile(None)
+    monkeypatch.delenv("FORTE_VISION_PROFILE")
+    assert backend_adapter._service_profile("legacy_full") == "fast"
+    assert backend_adapter._service_profile("full") == "full"

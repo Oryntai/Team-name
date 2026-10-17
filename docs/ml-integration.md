@@ -10,7 +10,7 @@
 python -m pip install -c requirements.lock -e '.[dev]' -e './decision[dev]'
 python -m pip install -r data_tools/requirements.txt
 export FORTE_RULES_FACTORY=forte_decision.backend_adapter:create_rules
-export FORTE_RULE_CATALOGS='["rules/cash_receipt.json"]'
+export FORTE_RULE_CATALOGS='["rules/cash_checks.json"]'
 ```
 
 На Windows задайте переменные средствами своей оболочки. При запуске вне корня используйте абсолютные пути каталогов. Editable checkout также находит seed-каталог автоматически; при установке wheel задайте FORTE_RULE_CATALOGS явно. Каталог проверяется при создании фабрики.

@@ -19,7 +19,8 @@ LEGACY_PREDICATES: dict[str, str] = {
     "client_absent_during_counting": "While the cashier counts banknotes, no client is present at the client side of the desk.",
     "cashier_left_workstation": "The cashier walks away from the workstation and leaves the visible cash area.",
     "departure_before_client_service_completed": "The cashier leaves the workstation while a client is still being served (client still present, operation not finished).",
-    # Рабочее место и помещение (rules/cash_workplace.json). Формулировки — по разметке открытой выборки:
+    # Рабочее место и помещение (только legacy-профили; каталога правил для них нет, сервис их не
+    # использует — см. backend_adapter.SERVICE_PROFILES). Формулировки — по разметке открытой выборки:
     # в чистых роликах кассир тоже уходит, но сначала убирает ценности и блокирует ноутбук.
     "cashier_absent_from_room": "The cashier walks out of the room through the door, or the cashier is no longer in the room in the later frames.",
     "workstation_left_unsecured": "While the cashier is away from the desk, banknotes, a cash bundle, a cash bag or documents are still lying on the desk, or the laptop screen still shows a working application (table/form) instead of a lock screen or closed lid.",

@@ -50,7 +50,7 @@ class Profile:
     timeline_frames: int = 8          # кадров на окно
     timeline_min_window_sec: float = 8.0
     timeline_max_windows: int = 8     # длинные ролики — шире окна, реже кадры, тот же бюджет запросов
-    timeline_size: tuple[int, int] | None = None
+    timeline_max_side: int = 960      # длинная сторона кадров для VLM; обрезки объектов — из исходного разрешения
     verify_frames: int = 6
 
 
@@ -274,14 +274,15 @@ def analyze_video(
     table = {**predicates.LEGACY_PREDICATES, **predicates.LEGACY_VISIBILITY}
     q_pred = predicates.predicate_question(names_p + names_v, table)
     # Бюджет: перепроверка — самый дорогой шаг (~десятки секунд на кандидата). Когда следующая
-    # перепроверка уже не успевает, оставшиеся (наименее приоритетные) кандидаты снимаются с отбора
-    # заранее — как при меньшем max_rechecks, — а не превращают весь анализ в partial.
+    # перепроверка уже не успевает, её не начинаем, чтобы уложиться в дедлайн. Неперепроверенные
+    # кандидаты остаются в Observation без предикатов, и анализ честно partial: таймаут не может
+    # превратиться в чистый no_violation.
     recheck_sec: list[float] = []
     budget_dropped: list[_Cand] = []
     for i, c in enumerate(selected):
         started = time.monotonic()
         if started > deadline or (recheck_sec and started + max(recheck_sec) > deadline):
-            budget_dropped = selected[i:] if recheck_sec else []
+            budget_dropped = selected[i:]
             break
         times = sorted(set(np.linspace(c.start, c.end, prof.recheck_frames).round(3).tolist()) | {round(c.main, 3)})
         frames = src.grab_at(times, size=prof.recheck_size)
@@ -311,9 +312,6 @@ def analyze_video(
                     vetoed.setdefault(id(c), []).append(name)
         rechecked[id(c)] = ({n: tri[n] for n in names_p}, {n: tri[n] for n in names_v}, [t for t, _ in frames])
         recheck_sec.append(time.monotonic() - started)
-    if budget_dropped:
-        dropped_ids = {id(c) for c in budget_dropped}
-        selected = [c for c in selected if id(c) not in dropped_ids]
     mark("recheck", t0)
 
     # 7. сборка Observation: только отобранные кандидаты
@@ -394,7 +392,9 @@ def analyze_video(
 
 
 def _crop_frames(frames, boxes, margin: float = 0.25, min_side: int = 448):
-    """Крупная обрезка объекта (медианная рамка детектора) в исходном разрешении, увеличенная для VLM."""
+    """Крупная обрезка объекта (медианная рамка детектора) в исходном разрешении, увеличенная для VLM.
+
+    Возвращает (кадры, обрезано ли). Слишком мелкая рамка — исходные кадры и False."""
     arr = np.median(np.asarray(boxes, dtype=float), axis=0)
     out = []
     for t, im in frames:
@@ -403,11 +403,19 @@ def _crop_frames(frames, boxes, margin: float = 0.25, min_side: int = 448):
         mx, my = (x1 - x0) * margin, (y1 - y0) * margin
         box = (max(0, int(x0 - mx)), max(0, int(y0 - my)), min(w, int(x1 + mx)), min(h, int(y1 + my)))
         if box[2] - box[0] < 8 or box[3] - box[1] < 8:
-            return frames
+            return frames, False
         crop = im.crop(box)
         scale = max(1.0, min_side / min(crop.size))
         out.append((t, crop.resize((int(crop.width * scale), int(crop.height * scale)))))
-    return out
+    return out, True
+
+
+def _fit_size(width: int, height: int, max_side: int) -> tuple[int, int] | None:
+    """Размер (ширина, высота) с длинной стороной не больше max_side и тем же соотношением; None — уже влезает."""
+    if max(width, height) <= max_side:
+        return None
+    scale = max_side / max(width, height)
+    return max(1, round(width * scale)), max(1, round(height * scale))
 
 
 def _timeline_windows(dur: float, prof: Profile) -> list[tuple[float, float]]:
@@ -422,17 +430,21 @@ def _analyze_timeline(vid, src, info, backend, prof, deadline, timings, t_start,
     t0 = time.monotonic()
     windows = _timeline_windows(dur, prof)
     question = timeline.timeline_question()
+    vlm_size = _fit_size(info.width, info.height, prof.timeline_max_side)
     steps: list[tuple[float, str]] = []
     pts_pool: list[float] = []
+    gaps: list[tuple[float, float]] = []  # окна без валидного ответа (битый ответ, нет кадров, дедлайн)
     covered = invalid = dropped = 0
     for ws, we in windows:
         if time.monotonic() > deadline:
-            break
+            gaps.append((ws, we))
+            continue
         times = [ws + (k + 0.5) * (we - ws) / prof.timeline_frames for k in range(prof.timeline_frames)]
-        frames = src.grab_at([round(t, 3) for t in times], size=prof.timeline_size)
+        frames = src.grab_at([round(t, 3) for t in times], size=vlm_size)
         frames = [(t, im) for t, im in frames if t <= dur + 1e-6]
         if not frames:
             invalid += 1
+            gaps.append((ws, we))
             continue
         pts_pool.extend(t for t, _ in frames)
         ans = backend.ask(frames, question, max_tokens=400)
@@ -440,13 +452,16 @@ def _analyze_timeline(vid, src, info, backend, prof, deadline, timings, t_start,
         dropped += n_dropped
         if not ok:
             invalid += 1
+            gaps.append((ws, we))
             continue
         steps.extend(parsed)
         covered += 1
     mark_t = round(time.monotonic() - t0, 2)
     timings["timeline"] = mark_t
     coverage_complete = covered == len(windows)
-    violations = timeline.run_checklist(steps, dur) if coverage_complete else []
+    # При неполном покрытии чек-лист всё равно идёт по найденным шагам, но нарушение остаётся, только
+    # если его вывод не зависит от непокрытых окон (Violation.reach). Анализ при этом остаётся partial.
+    violations = timeline.run_checklist(steps, dur, gaps=gaps)
 
     # Верификация в обе стороны: точный вопрос по плотным кадрам (крупная обрезка объекта, если
     # детектор его нашёл) — снимает выдуманные нарушения и ловит пропущенные, когда таймлайн
@@ -456,18 +471,21 @@ def _analyze_timeline(vid, src, info, backend, prof, deadline, timings, t_start,
     def verify_at(check: str, t_main: float) -> tuple[str, bool]:
         lo, hi = timeline.VERIFY[check][2]
         a, b = max(0.0, t_main + lo), min(dur, t_main + hi)
+        target = timeline.CROP_TARGET.get(check) if detector is not None else None
+        # обрезка нужна в исходном разрешении; без неё кадры сразу в размере для VLM
         frames = src.grab_at([round(a + (k + 0.5) * (b - a) / prof.verify_frames, 3)
-                              for k in range(prof.verify_frames)], size=prof.timeline_size)
+                              for k in range(prof.verify_frames)], size=None if target else vlm_size)
         frames = [(t, im) for t, im in frames if t <= dur + 1e-6]
         if not frames:
             return "unclear", False
         pts_pool.extend(t for t, _ in frames)
         cropped = False
-        target = timeline.CROP_TARGET.get(check)
-        if detector is not None and target:
+        if target:
             boxes = [b for d in detector.detect(frames) for name, b in d.objects if name in target]
             if boxes:
-                frames, cropped = _crop_frames(frames, boxes), True
+                frames, cropped = _crop_frames(frames, boxes)
+            if not cropped and vlm_size is not None:
+                frames = [(t, im.resize(vlm_size)) for t, im in frames]
         text = backend.ask(frames, timeline.verify_question(check), max_tokens=8).text
         return timeline.parse_verdict(text), cropped
 
@@ -481,7 +499,7 @@ def _analyze_timeline(vid, src, info, backend, prof, deadline, timings, t_start,
         verdicts.append({"check": v.check, "answer": answer, "mode": "confirm", "cropped": cropped})
         if timeline.confirmed(v.check, answer):
             kept.append(v)
-    rejected = [v for v in violations if v not in kept]
+    rejected = [v for v in violations if all(v is not k for k in kept)]
     recovered = []
     for check, t_main in timeline.recall_triggers(steps, {v.check for v in violations}):
         if time.monotonic() > deadline:
@@ -489,7 +507,7 @@ def _analyze_timeline(vid, src, info, backend, prof, deadline, timings, t_start,
         answer, cropped = verify_at(check, t_main)
         verdicts.append({"check": check, "answer": answer, "mode": "recall", "cropped": cropped})
         if answer != "unclear" and timeline.confirmed(check, answer):  # добавляем только по явному ответу
-            recovered.append(timeline._v(check, t_main, "подтверждено точной перепроверкой события", dur))
+            recovered.append(timeline.violation_at(check, t_main, "подтверждено точной перепроверкой события", dur))
     timings["verify"] = round(time.monotonic() - t0, 2)
     violations = kept + recovered
 
@@ -537,6 +555,7 @@ def _analyze_timeline(vid, src, info, backend, prof, deadline, timings, t_start,
         "timeline_windows": len(windows),
         "timeline_covered_windows": covered,
         "timeline_invalid_windows": invalid,
+        "timeline_gaps": [[round(a, 3), round(b, 3)] for a, b in gaps],
         "timeline_dropped_items": dropped,
         "timeline_steps": [[round(t, 2), e] for t, e in sorted(steps)],
         "violations": [{"check": v.check, "main_sec": v.main_sec, "reason": v.reason} for v in violations],

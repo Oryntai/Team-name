@@ -170,7 +170,7 @@ def test_object_predicate_needs_detector_confirmation(synthetic_video):
     assert any(c["predicates"]["food_or_drink_at_desk"] == "observed" for c in obs["candidates"])
 
 
-def test_recheck_budget_drops_low_priority_candidates_instead_of_partial(synthetic_video):
+def test_recheck_budget_skips_rechecks_but_stays_partial(synthetic_video):
     import time
 
     def slow(times, question):
@@ -183,9 +183,10 @@ def test_recheck_budget_drops_low_priority_candidates_instead_of_partial(synthet
                               deadline_sec=1.5)
     validate_observation(obs)
     assert obs["coverage_complete"] is True
-    assert obs["analysis_status"] == "complete"
+    # unchecked candidates are a timeout: they stay in the observation and the analysis is never complete
+    assert obs["analysis_status"] == "partial"
     assert diag["budget_dropped_count"] > 0
-    assert obs["candidates"] and all(c["predicates"] for c in obs["candidates"])
+    assert sum(not c["predicates"] for c in obs["candidates"]) == diag["budget_dropped_count"]
 
 
 class _PeopleDetector(_FakeDetector):

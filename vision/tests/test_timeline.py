@@ -118,3 +118,70 @@ def test_recall_triggers_only_for_silent_checks_with_their_event():
     steps = [(3, "cashier_stands_up"), (5, "cashier_leaves"), (9, "safe_open")]
     assert dict(recall_triggers(steps, set())) == {"LOCK": 3, "LEAVE": 3, "SAFE": 9}
     assert "LOCK" not in dict(recall_triggers(steps, {"LOCK"}))
+
+
+def test_step_at_zero_seconds_counts_as_found():
+    # bag opened in the very first frame, no bag_received: REG must still be checked
+    assert "REG" in checks([(0.0, "bag_opened"), (5, "safe_open"), (6, "put_in_safe")])
+    # standing up at 0.0 is the departure timecode, not "missing"
+    found = run_checklist([(0.0, "cashier_stands_up"), (2, "screen_working"), (4, "cashier_leaves")], 20.0)
+    assert [(v.check, v.main_sec) for v in found] == [("LOCK", 0.0)]
+
+
+def test_every_departure_is_checked():
+    steps = [(2, "screen_locked"), (3, "cashier_leaves"), (8, "cashier_enters"),
+             (40, "screen_working"), (42, "cashier_stands_up"), (44, "cashier_leaves"), (45, "cash_on_desk")]
+    found = {v.check: v.main_sec for v in run_checklist(steps, 60.0)}
+    assert found == {"LOCK": 42, "LEAVE": 42}
+
+
+def test_safe_and_door_reopened_after_closing():
+    assert checks([(3, "safe_open"), (6, "safe_closed"), (20, "safe_open"), (28, "safe_open")], 40.0) == ["SAFE"]
+    assert checks([(3, "safe_open"), (6, "safe_closed"), (20, "safe_open"), (22, "safe_closed")], 40.0) == []
+    door = [(1, "cashier_enters"), (2, "door_open"), (3, "door_closed"), (15, "door_open"), (25, "door_open")]
+    assert checks(door, 40.0) == ["DOOR"]
+
+
+def test_gaps_drop_only_violations_that_depend_on_them():
+    steps = [(2, "food_drink"), (4, "food_drink"), (9, "cash_given_by_client")]
+    assert set(checks(steps)) == {"FOOD", "DOC"}
+    # the ID document may have been shown in the uncovered window: DOC is not proven, FOOD still is
+    assert [v.check for v in run_checklist(steps, 30.0, gaps=[(5.0, 8.0)])] == ["FOOD"]
+    assert set(v.check for v in run_checklist(steps, 30.0, gaps=[(20.0, 30.0)])) == {"FOOD", "DOC"}
+
+
+def test_checks_match_vision_predicates():
+    from forte_vision.predicates import PREDICATES
+
+    assert set(CHECKS.values()) == set(PREDICATES)
+
+
+def test_partial_timeline_keeps_violations_seen_in_covered_windows(synthetic_video):
+    from forte_vision import analyze_video
+    from forte_vision.vlm import StubBackend
+
+    def respond(times, question):
+        if "Return ONLY a JSON list" in question:
+            if times[0] < 8:
+                return "the model rambled instead of JSON"
+            return json.dumps([{"event": "items_on_desk", "t": times[0]}, {"event": "items_on_desk", "t": times[-1]}])
+        return "yes"
+
+    obs, diag = analyze_video(synthetic_video, StubBackend(respond), video_id="syn", profile="fast")
+    assert obs["analysis_status"] == "partial" and obs["coverage_complete"] is False
+    assert diag["timeline_gaps"]
+    assert any(c["predicates"]["personal_items_on_desk"] == "observed" for c in obs["candidates"])
+
+
+def test_crop_reports_fallback_and_fit_size():
+    from PIL import Image
+
+    from forte_vision.observer import _crop_frames, _fit_size
+
+    frames = [(1.0, Image.new("RGB", (100, 80)))]
+    out, cropped = _crop_frames(frames, [(10, 10, 12, 12)], margin=0.0)
+    assert not cropped and out is frames
+    out, cropped = _crop_frames(frames, [(10, 10, 60, 60)])
+    assert cropped and min(out[0][1].size) >= 448
+    assert _fit_size(464, 848, 960) is None
+    assert _fit_size(1920, 1080, 960) == (960, 540)

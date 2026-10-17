@@ -123,6 +123,9 @@ class Violation:
     end_sec: float
     reason: str
     evidence_sec: list[float] = field(default_factory=list)
+    # Насколько до/после main_sec вывод опирается на шаги таймлайна (в т.ч. на их отсутствие).
+    # Непокрытое окно в этом диапазоне делает вывод недоказанным (см. run_checklist(gaps=...)).
+    reach: tuple[float, float] = (0.0, 0.0)
 
 
 class _TL:
@@ -142,59 +145,85 @@ class _TL:
         return ts[-1] if ts else None
 
 
-def _v(check, t, reason, duration, lo=2.0, hi=3.0, extra=()):
+def _either(value: float | None, fallback: float | None) -> float | None:
+    """value, если шаг найден; иначе fallback. Не `or`: шаг на 0.0 с — тоже найденный шаг."""
+    return fallback if value is None else value
+
+
+def violation_at(check, t, reason, duration, lo=2.0, hi=3.0, extra=(), reach=(0.0, 0.0)) -> Violation:
     s, e = max(0.0, t - lo), min(duration, t + hi)
     ev = sorted({round(min(max(x, s), e), 3) for x in (t, *extra)})
-    return Violation(check, round(t, 3), round(s, 3), round(e, 3), reason, ev[:3])
+    return Violation(check, round(t, 3), round(s, 3), round(e, 3), reason, ev[:3], reach)
 
 
-def run_checklist(steps: list[tuple[float, str]], duration: float) -> list[Violation]:
+_INF = math.inf
+
+
+def run_checklist(steps: list[tuple[float, str]], duration: float,
+                  gaps: list[tuple[float, float]] | tuple = ()) -> list[Violation]:
+    """Нарушения по шагам таймлайна. gaps — непокрытые интервалы видео: нарушение, чей вывод
+    опирается на шаги из такого интервала (Violation.reach), не выдаётся."""
     tl, out = _TL(steps), []
     count = lambda lo, hi: tl.any("cash_counted_by_hand", lo, hi) or tl.any("counting_machine", lo, hi)  # noqa: E731
+    v = lambda *a, **k: out.append(violation_at(*a, **k))  # noqa: E731
 
     # DOC: деньги или мешок приняты без предъявленного документа
-    for t in tl.by["cash_given_by_client"] + tl.by["bag_received"]:
+    for t in sorted(tl.by["cash_given_by_client"] + tl.by["bag_received"]):
         if not tl.any("id_document_shown", t - 30.0, t + 3.0):
-            out.append(_v("DOC", t, "деньги/мешок приняты, документ клиента не предъявлен", duration))
+            v("DOC", t, "деньги/мешок приняты, документ клиента не предъявлен", duration, reach=(30.0, 3.0))
             break
 
     # MIX: стопки разных клиентов сложены вместе, либо новый клиент пришёл, а деньги прошлого лежат на столе
     if tl.by["stacks_combined"]:
-        out.append(_v("MIX", tl.by["stacks_combined"][0], "деньги разных клиентов сложены вместе", duration))
+        v("MIX", tl.by["stacks_combined"][0], "деньги разных клиентов сложены вместе", duration)
     else:
         for t1 in tl.by["client_leaves"]:
             t2 = tl.first("client_arrives", t1 + 1.0, t1 + 60.0)
             if t2 is not None and tl.any("cash_on_desk", t1, t2 + 3.0) and not tl.any("put_in_safe", t1, t2):
-                out.append(_v("MIX", t2, "следующий клиент обслуживается при неубранных деньгах предыдущего",
-                              duration, extra=(t1,)))
+                v("MIX", t2, "следующий клиент обслуживается при неубранных деньгах предыдущего",
+                  duration, extra=(t1,), reach=(60.0, 3.0))
                 break
 
-    # LOCK / LEAVE / BAG: что осталось при уходе кассира
-    bag_case = bool(tl.by["bag_received"] or tl.by["bag_opened"])
+    # LOCK / LEAVE / BAG: что осталось при каждом уходе кассира (каждая проверка — не больше одного раза)
+    bag_times = tl.by["bag_received"] + tl.by["bag_opened"]
+    fired: set[str] = set()
     for t_leave in tl.by["cashier_leaves"]:
-        t_up = tl.last("cashier_stands_up", t_leave - 15.0, t_leave) or t_leave
-        if tl.any("screen_working", t_leave - 10.0, t_leave + 10.0) and not tl.any("screen_locked", t_leave - 25.0, t_leave + 5.0):
-            out.append(_v("LOCK", t_up, "кассир уходит, экран компьютера не заблокирован", duration, extra=(t_leave,)))
+        t_up = _either(tl.last("cashier_stands_up", t_leave - 15.0, t_leave), t_leave)
+        if ("LOCK" not in fired and tl.any("screen_working", t_leave - 10.0, t_leave + 10.0)
+                and not tl.any("screen_locked", t_leave - 25.0, t_leave + 5.0)):
+            v("LOCK", t_up, "кассир уходит, экран компьютера не заблокирован", duration, extra=(t_leave,),
+              reach=(25.0, 25.0))
+            fired.add("LOCK")
         if tl.any("cash_on_desk", t_up - 3.0, t_leave + 15.0) and not tl.any("put_in_safe", t_leave - 20.0, t_leave):
-            if bag_case and not count(min(tl.by["bag_received"] + tl.by["bag_opened"]), t_leave):
-                out.append(_v("BAG", t_up, "мешок не пересчитан и оставлен на столе при уходе", duration, extra=(t_leave,)))
-            else:
-                out.append(_v("LEAVE", t_up, "кассир уходит, ценности остаются на столе", duration, extra=(t_leave,)))
-        break
+            bag_before = [t for t in bag_times if t <= t_leave]
+            if bag_before and not count(min(bag_before), t_leave):
+                if "BAG" not in fired:
+                    v("BAG", t_up, "мешок не пересчитан и оставлен на столе при уходе", duration, extra=(t_leave,),
+                      reach=(_INF, 25.0))
+                    fired.add("BAG")
+            elif "LEAVE" not in fired:
+                v("LEAVE", t_up, "кассир уходит, ценности остаются на столе", duration, extra=(t_leave,),
+                  reach=(25.0, 25.0))
+                fired.add("LEAVE")
 
-    # SAFE: сейф открыт и дальше не закрывается, открытость держится не меньше 6 с
-    t_open = tl.first("safe_open")
-    if t_open is not None and not tl.any("safe_closed", t_open) and tl.any("safe_open", t_open + 6.0):
-        t = tl.last("put_in_safe", hi=t_open + 6.0) or t_open
-        out.append(_v("SAFE", t + 2.0 if t + 2.0 <= duration else t, "сейф оставлен открытым", duration))
+    # SAFE: сейф открыт после последнего закрытия, открытость держится не меньше 6 с
+    last_close = tl.last("safe_closed")
+    after_close = -_INF if last_close is None else last_close + 1e-9
+    t_open = tl.first("safe_open", after_close)
+    if t_open is not None and tl.any("safe_open", t_open + 6.0):
+        t = _either(tl.last("put_in_safe", after_close, t_open + 6.0), t_open)
+        v("SAFE", t + 2.0 if t + 2.0 <= duration else t, "сейф оставлен открытым", duration, reach=(8.0, _INF))
 
-    # DOOR: кассир вошла, а дверь после этого стоит открытой не меньше 6 с и не закрывается
+    # DOOR: кассир вошла, а дверь после этого (и после последнего закрытия) стоит открытой не меньше 6 с
     t_in = tl.first("cashier_enters")
     if t_in is not None:
-        t_door = tl.first("door_open", t_in - 1.0)
-        if t_door is not None and not tl.any("door_closed", t_in - 1.0) and tl.any("door_open", t_door + 6.0):
+        last_door_close = tl.last("door_closed", t_in - 1.0)
+        lo = t_in - 1.0 if last_door_close is None else last_door_close + 1e-9
+        t_door = tl.first("door_open", lo)
+        if t_door is not None and tl.any("door_open", t_door + 6.0):
             extra = tuple(tl.by["outsider_enters"][:1])
-            out.append(_v("DOOR", max(t_in, t_door), "кассир вошла и не закрыла дверь кассы", duration, extra=extra))
+            v("DOOR", max(t_in, t_door), "кассир вошла и не закрыла дверь кассы", duration, extra=extra,
+              reach=(10.0, _INF))
 
     # NOCLIENT: клиент ушёл, а его деньги пересчитываются после ухода
     for t0 in tl.by["cash_given_by_client"]:
@@ -204,34 +233,38 @@ def run_checklist(steps: list[tuple[float, str]], duration: float) -> list[Viola
         t2 = min([t for e in ("cash_counted_by_hand", "counting_machine") for t in tl.by[e] if t1 <= t <= t1 + 30.0],
                  default=None)
         if t2 is not None and not tl.any("client_arrives", t1, t2):
-            out.append(_v("NOCLIENT", t2, "пересчёт после ухода клиента", duration, extra=(t1,)))
+            v("NOCLIENT", t2, "пересчёт после ухода клиента", duration, extra=(t1,), reach=(45.0, 1.0))
             break
 
-    # ITEMS / FOOD
     # ITEMS / FOOD: состояние должно быть замечено минимум дважды (разовые упоминания — частая галлюцинация)
     if len(set(tl.by["items_on_desk"])) >= 2:
-        out.append(_v("ITEMS", tl.by["items_on_desk"][0], "личные вещи на кассовом столе", duration))
+        v("ITEMS", tl.by["items_on_desk"][0], "личные вещи на кассовом столе", duration)
     if len(set(tl.by["food_drink"])) >= 2:
-        out.append(_v("FOOD", tl.by["food_drink"][0], "еда или напитки на рабочем месте", duration))
+        v("FOOD", tl.by["food_drink"][0], "еда или напитки на рабочем месте", duration)
 
     # AUTH: ручной пересчёт без машины и без детектора за всё видео, без клиента
     if (tl.by["cash_counted_by_hand"] and not tl.by["counting_machine"] and not tl.by["uv_detector"]
-            and not tl.by["client_arrives"] and not bag_case):
-        out.append(_v("AUTH", tl.by["cash_counted_by_hand"][0], "купюры не проверены на детекторе", duration))
+            and not tl.by["client_arrives"] and not bag_times):
+        v("AUTH", tl.by["cash_counted_by_hand"][0], "купюры не проверены на детекторе", duration, reach=(_INF, _INF))
 
     # REG: деньги из мешка в сейф без пересчёта и без работы с компьютером между ними
-    t_bag = tl.first("bag_opened") or tl.first("bag_received")
+    t_bag = _either(tl.first("bag_opened"), tl.first("bag_received"))
     if t_bag is not None:
         t_put = tl.first("put_in_safe", t_bag)
         t_safe = None if t_put is None else min(t for t in (t_put, tl.first("safe_open", t_bag, t_put)) if t is not None)
         if t_safe is not None and not count(t_bag, t_safe) and not tl.any("computer_work", t_bag, t_safe):
-            out.append(_v("REG", t_safe, "деньги из мешка в сейф без пересчёта и учёта в системе", duration,
-                          extra=(t_bag,)))
+            v("REG", t_safe, "деньги из мешка в сейф без пересчёта и учёта в системе", duration,
+              extra=(t_bag,), reach=(_INF, 1.0))
 
     # QUE
     if tl.by["queue_jump"]:
-        out.append(_v("QUE", tl.by["queue_jump"][0], "обслуживание вне очереди", duration))
-    return out
+        v("QUE", tl.by["queue_jump"][0], "обслуживание вне очереди", duration)
+
+    def provable(x: Violation) -> bool:
+        before, after = x.reach
+        return not any(a < x.main_sec + after and b > x.main_sec - before for a, b in gaps)
+
+    return [x for x in out if provable(x)]
 
 
 # Верификатор: точный вопрос по плотным кадрам вокруг найденного нарушения.
@@ -281,10 +314,10 @@ def confirmed(check: str, answer: str) -> bool:
     return answer == ("no" if inverted else "yes")
 
 
-# Обрезка объекта для верификатора (классы COCO детектора).
+# Обрезка объекта для верификатора (классы COCO детектора). Только для вопросов о самом предмете на
+# столе: вопросы про уход кассира, клиентов или дверь (LOCK, LEAVE, BAG, MIX...) идут по полному кадру,
+# иначе на обрезке не видно того, о чём спрашивают.
 CROP_TARGET: dict[str, set[str]] = {
-    "LOCK": {"laptop"},
-    "LEAVE": {"dining table"}, "MIX": {"dining table"}, "BAG": {"dining table"},
     "FOOD": {"dining table"}, "ITEMS": {"dining table"},
 }
 
@@ -303,6 +336,6 @@ def recall_triggers(steps: list[tuple[float, str]], fired: set[str]) -> list[tup
             continue
         t = tl.by[event][0]
         if event == "cashier_leaves":
-            t = tl.last("cashier_stands_up", t - 15.0, t) or t
+            t = _either(tl.last("cashier_stands_up", t - 15.0, t), t)
         out.append((check, t))
     return out
