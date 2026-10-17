@@ -25,4 +25,4 @@ nohup ../deploy/infra/mac/serve.sh ../local_data/mac.env >/dev/null 2>&1 &
 while ($true) { ssh -N -i $env:USERPROFILE\.ssh\forte_tunnel_ed25519 -o IdentitiesOnly=yes -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes -R 127.0.0.1:18080:127.0.0.1:8080 forte-tunnel@<сервер>; Start-Sleep 3 }
 ```
 
-Mac получает его через `-L 18080` своего туннеля; если ноут недоступен, worker считает на локальной MLX-модели.
+Mac получает его через `-L 18080` своего туннеля. Анализатор «по якорям» обращается к модели только по этому адресу.
