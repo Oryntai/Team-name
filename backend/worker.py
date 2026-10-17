@@ -155,6 +155,26 @@ def _require_time(deadline_at: float) -> None:
         raise TimeoutError("Job deadline exceeded")
 
 
+# Time a queued job needs after its analysis (evidence frames, rules) and the least analysis time worth starting.
+SHARE_TAIL_SEC = 10.0
+SHARE_FLOOR_SEC = 30.0
+
+
+def fair_share_end(now: float, hard_deadline: float, queued: list[float],
+                   tail: float = SHARE_TAIL_SEC, floor: float = SHARE_FLOOR_SEC) -> float:
+    """When the running job should stop analysing so the jobs waiting behind it still meet their own deadlines.
+
+    The queue is served one job at a time and every deadline counts from upload, so five videos uploaded at once
+    share one five-minute window. The running job and the first k waiting jobs must all finish before the k-th
+    waiting deadline, so each of them gets an equal part of that time. A job with nobody waiting keeps its whole
+    budget; a share never drops below `floor` (unless the hard deadline is closer).
+    """
+    end = hard_deadline
+    for k, deadline in enumerate(sorted(queued), start=1):
+        end = min(end, now + (deadline - tail - now) / (k + 1))
+    return min(hard_deadline, max(end, now + floor))
+
+
 def _require_frame_pts(pts: float, available: tuple[float, ...]) -> None:
     index = bisect.bisect_left(available, pts)
     candidates = available[max(0, index - 1):index + 1]
@@ -252,6 +272,10 @@ def _model_main(connection, config: dict, parent_pid: int) -> None:
     try:
         analyzer = _factory(config["analyzer_factory"])
         rules = _factory(config["rules_factory"])
+        if hasattr(analyzer, "time_share") and config.get("db_path"):
+            # The analyzer asks before each costly step how long it may run while others wait in the queue.
+            queue = Store(Path(config["db_path"]))
+            analyzer.time_share = lambda hard: fair_share_end(time.time(), hard, queue.queued_deadlines())
     except BaseException as error:
         connection.send({"kind": "startup_failed", "diagnostics": {"error_type": type(error).__name__}})
         connection.close()
@@ -293,7 +317,7 @@ class Supervisor:
         self.last_purge = 0.0
         self.model_ready = False
         self.config = {name: str(getattr(settings, name)) for name in (
-            "ffmpeg_bin", "ffprobe_bin", "analyzer_factory", "rules_factory")}
+            "ffmpeg_bin", "ffprobe_bin", "analyzer_factory", "rules_factory", "db_path")}
 
     def __enter__(self):
         if self.entered:

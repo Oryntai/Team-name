@@ -140,6 +140,14 @@ class Store:
                 "SELECT * FROM jobs WHERE job_id=?", (job_id,),
             ).fetchone())
 
+    def queued_deadlines(self) -> list[float]:
+        """Deadlines of the jobs still waiting for the worker, earliest first."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT deadline_at FROM jobs WHERE status='queued' ORDER BY deadline_at"
+            ).fetchall()
+        return [float(row[0]) for row in rows]
+
     def expire(self, now: float | None = None) -> int:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")

@@ -42,6 +42,9 @@ class AnchoredAnalyzer:
         self.detector, self.asker = detector, asker
         self.reserve, self.scan_fps = reserve_sec, scan_fps
         self.known = _known_predicates()
+        # worker ставит сюда f(жёсткий срок, epoch) -> до какого момента (epoch) разбирать ролик, чтобы очередь
+        # за ним тоже успела; без очереди срок не меняется
+        self.time_share = None
 
     def analyze(self, context: AnalysisContext, video) -> ObservationBatch:
         from forte_vision.backend_adapter import VideoIOSource
@@ -53,15 +56,26 @@ class AnchoredAnalyzer:
 
         t0 = time.monotonic()
         deadline = t0 + max(10.0, context.deadline_at - time.time() - self.reserve)
+
+        def share_end() -> float:
+            """Доля этого ролика (monotonic): ролики, загруженные вместе, делят одно окно в 5 минут."""
+            if self.time_share is None:
+                return deadline
+            try:
+                soft = float(self.time_share(context.deadline_at))
+            except Exception:
+                return deadline
+            return min(deadline, time.monotonic() + soft - time.time())
+
         _forget(self.asker)  # ответы по прошлому ролику в памяти процесса не держим
         src = VideoIOSource(video, context.video_path)
         dur = float(src.info.duration_sec)
         path = str(context.video_path)
-        timings = {}
+        timings = {"share_sec": round(share_end() - t0, 1)}
 
-        # 1) плотный проход детектора не дольше трети остатка бюджета
+        # 1) плотный проход детектора не дольше трети доли ролика
         scan = dense_scan(path, fps=self.scan_fps, detector=self.detector,
-                          deadline=t0 + 0.35 * (deadline - t0))
+                          deadline=t0 + 0.35 * (share_end() - t0))
         timings["t_scan"] = round(time.monotonic() - t0, 2)
 
         # 2) зоны: 2–4 вопроса модели на ролик
@@ -94,14 +108,17 @@ class AnchoredAnalyzer:
         answers: dict[str, CropAnswer] = {}
         asked = 0
         ctx = _context_text(people)
-        for batch in _chunks(event_items, 8) + _chunks(sweep_items, 8):
-            if time.monotonic() > deadline - 12.0:
+        for i, batch in enumerate(_chunks(event_items, 8) + _chunks(sweep_items, 8)):
+            # первая пачка ограничена только жёстким сроком: без неё ролик остался бы без вердикта;
+            # дальше — доля ролика в очереди (запас на кадры-доказательства уже заложен в долю)
+            stop = deadline - 12.0 if i == 0 else min(deadline - 12.0, share_end() - 5.0)
+            if time.monotonic() > stop:
                 break
             try:
                 got = self.asker.ask(path, batch, ctx)
                 # сервер модели моргнул (туннель переподключается, перегрузка) — переспросить, пока есть время
                 for wait in (3.0, 8.0):
-                    if not any(_failed(a) for a in got) or time.monotonic() + wait > deadline - 12.0:
+                    if not any(_failed(a) for a in got) or time.monotonic() + wait > stop:
                         break
                     time.sleep(wait)
                     got = self.asker.ask(path, batch, ctx)
