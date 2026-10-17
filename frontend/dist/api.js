@@ -46,6 +46,60 @@ export async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 15000,
 }
 
 /**
+ * Same-origin multipart upload that reports real transfer progress (fetch cannot).
+ * Resolves with the same `{ response: { ok, status }, payload }` shape as fetchJsonWithTimeout.
+ * @param {string} url
+ * @param {FormData} body
+ * @param {{ timeoutMs?: number, signal?: AbortSignal, onProgress?: (loaded: number, total: number) => void }} [options]
+ * @returns {Promise<{ response: { ok: boolean, status: number }, payload: unknown }>}
+ */
+export function uploadWithProgress(url, body, { timeoutMs = 15000, signal, onProgress } = {}) {
+  const requestUrl = new URL(url, window.location.href);
+  if (requestUrl.origin !== window.location.origin) {
+    return Promise.reject(new TypeError("The UI API client only supports same-origin requests"));
+  }
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("The upload was aborted", "AbortError"));
+      return;
+    }
+    const xhr = new XMLHttpRequest();
+    const abort = () => xhr.abort();
+    const cleanup = () => signal?.removeEventListener("abort", abort);
+    xhr.open("POST", requestUrl.href);
+    xhr.setRequestHeader("Accept", "application/json");
+    xhr.timeout = timeoutMs;
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) onProgress?.(event.loaded, event.total);
+    };
+    xhr.onload = () => {
+      cleanup();
+      let payload = null;
+      try {
+        payload = xhr.responseText ? JSON.parse(xhr.responseText) : null;
+      } catch {
+        payload = null;
+      }
+      resolve({ response: { ok: xhr.status >= 200 && xhr.status < 300, status: xhr.status }, payload });
+    };
+    xhr.onerror = () => { cleanup(); reject(new TypeError("Failed to fetch")); };
+    xhr.ontimeout = () => { cleanup(); reject(new DOMException("The upload timed out", "AbortError")); };
+    xhr.onabort = () => { cleanup(); reject(new DOMException("The upload was aborted", "AbortError")); };
+    signal?.addEventListener("abort", abort, { once: true });
+    xhr.send(body);
+  });
+}
+
+/**
+ * The shared jury API key shown on the API page (the same value on every request).
+ * @param {number} [timeoutMs=8000]
+ * @returns {Promise<{ response: Response, payload: unknown }>}
+ */
+export function fetchPublicKey(timeoutMs = 8000) {
+  return fetchJsonWithTimeout("/ui-api/key", { method: "GET", headers: { Accept: "application/json" }, cache: "no-store" }, timeoutMs);
+}
+
+/**
  * Check backend readiness using its public, unauthenticated endpoint.
  * @param {number} [timeoutMs=8000]
  * @param {AbortSignal} [parentSignal]

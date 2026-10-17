@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
-import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, isJobResponse } from "../dist/api.js";
+import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, isJobResponse, uploadWithProgress } from "../dist/api.js";
 
 const originalFetch = globalThis.fetch;
 const originalWindow = globalThis.window;
@@ -148,4 +148,46 @@ test("propagates cancellation from the active job", async () => {
   const request = fetchJsonWithTimeout("/ui-api/jobs/job-1", {}, 5000, controller.signal);
   controller.abort();
   await assert.rejects(request, { name: "AbortError" });
+});
+
+class FakeXhr {
+  static last;
+  constructor() { this.headers = {}; this.upload = {}; FakeXhr.last = this; }
+  open(method, url) { this.method = method; this.url = url; }
+  setRequestHeader(name, value) { this.headers[name] = value; }
+  send(body) { this.body = body; }
+  abort() { this.onabort?.(); }
+  respond(status, text) { this.status = status; this.responseText = text; this.onload?.(); }
+}
+
+test("upload reports real progress, stays same-origin and never adds a jury key", async () => {
+  const originalXhr = globalThis.XMLHttpRequest;
+  globalThis.XMLHttpRequest = FakeXhr;
+  try {
+    const seen = [];
+    const request = uploadWithProgress("/ui-api/analyze", "body", { onProgress: (loaded, total) => seen.push([loaded, total]) });
+    const xhr = FakeXhr.last;
+    assert.equal(xhr.method, "POST");
+    assert.equal(xhr.url, "http://127.0.0.1:8000/ui-api/analyze");
+    assert.equal("X-API-Key" in xhr.headers, false);
+    xhr.upload.onprogress({ lengthComputable: true, loaded: 50, total: 100 });
+    xhr.upload.onprogress({ lengthComputable: false, loaded: 70, total: 0 });
+    xhr.respond(200, JSON.stringify({ job_id: "job-1" }));
+    const { response, payload } = await request;
+    assert.deepEqual(seen, [[50, 100]]);
+    assert.equal(response.ok, true);
+    assert.deepEqual(payload, { job_id: "job-1" });
+
+    const rejected = uploadWithProgress("/ui-api/analyze", "body");
+    FakeXhr.last.respond(413, "{\"detail\":\"too big\"}");
+    assert.equal((await rejected).response.status, 413);
+
+    const controller = new AbortController();
+    const aborted = uploadWithProgress("/ui-api/analyze", "body", { signal: controller.signal });
+    controller.abort();
+    await assert.rejects(aborted, { name: "AbortError" });
+    await assert.rejects(() => uploadWithProgress("https://example.org/ui-api/analyze", "body"), { name: "TypeError" });
+  } finally {
+    globalThis.XMLHttpRequest = originalXhr;
+  }
 });

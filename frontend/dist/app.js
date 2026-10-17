@@ -1,15 +1,18 @@
-import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, isJobResponse } from "./api.js";
+import { fetchJsonWithTimeout, isJobAccepted, isJobResponse, uploadWithProgress } from "./api.js";
+import { createApiDocs } from "./api-docs.js";
+import { clearChecks, deleteCheck, listChecks, saveCheck } from "./history-store.js";
+import { createPlayer } from "./player.js";
+import { NORMS } from "./norms.js";
 
 (() => {
   "use strict";
 
   // The UI has no public settings endpoint; keep this aligned with the backend default.
   // The backend still enforces its configured FORTE_MAX_UPLOAD_MB value.
-  const MAX_FILE_BYTES = 64 * 1024 * 1024;
+  const MAX_FILE_BYTES = 50 * 1024 * 1024;
   const JOB_DEADLINE_MS = 5 * 60 * 1000;
   const POLL_INTERVAL_MS = 1500;
   const API_TIMEOUT_MS = 15000;
-  const HEALTH_TIMEOUT_MS = 8000;
   const $ = (selector) => document.querySelector(selector);
   const $$ = (selector) => [...document.querySelectorAll(selector)];
 
@@ -18,24 +21,10 @@ import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, 
     sidebarToggle: $("#sidebar-toggle"),
     sidebarClose: $("#sidebar-close"),
     sidebarBackdrop: $("#sidebar-backdrop"),
-    sidebarSession: $("#sidebar-session"),
     navResults: $("#nav-results"),
-    navRules: $("#nav-rules"),
     navResultCount: $("#nav-result-count"),
-    apiHealth: $("#api-health"),
-    apiHealthHeading: $("#api-health-heading"),
-    apiHealthMessage: $("#api-health-message"),
-    apiHealthChecks: $("#api-health-checks"),
-    apiCheckButton: $("#api-check-button"),
-    apiBaseUrl: $("#api-base-url"),
-    apiRequestExample: $("#api-request-example"),
-    apiCopyRequest: $("#api-copy-request"),
-    apiCopyMessage: $("#api-copy-message"),
     navItems: $$(".nav-item[data-view]"),
-    activeSectionName: $("#active-section-name"),
-    eventsTitle: $("#events-title"),
     eventList: $("#event-list"),
-    resultFileName: $("#result-file-name"),
     uploadView: $("#upload-view"),
     form: $("#upload-form"),
     dropArea: $("#drop-area"),
@@ -47,20 +36,29 @@ import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, 
     chooseFileButton: $("#choose-file-button"),
     replaceFile: $("#replace-file"),
     removeFile: $("#remove-file"),
-    uploadActionHint: $("#upload-action-hint"),
     startButton: $("#start-button"),
     processingView: $("#processing-view"),
     processingFile: $("#processing-file"),
     processingStage: $("#processing-stage"),
     processingSteps: $$("#processing-steps [data-stage]"),
     elapsedTime: $("#elapsed-time"),
-    jobReference: $("#job-reference"),
+    processingTitle: $("#processing-title"),
+    processingMeta: $("#processing-meta"),
+    processPreview: $("#process-preview"),
+    processVideo: $("#process-video"),
+    processBar: $("#process-bar"),
+    processBarFill: $("#process-bar-fill"),
+    uploadProgressText: $("#upload-progress-text"),
     connectionNote: $("#connection-note"),
     resultView: $("#result-view"),
+    historyView: $("#history-view"),
+    historyList: $("#history-list"),
+    historyEmpty: $("#history-empty"),
+    historyClear: $("#history-clear"),
+    historyStart: $("#history-start"),
+    resultBack: $("#result-back"),
     resultTitle: $("#result-title"),
     resultSummary: $("#result-summary"),
-    resultNote: $("#result-note"),
-    verdictBadge: $("#verdict-badge"),
     eventsLayout: $("#events-layout"),
     selectedEventTitle: $("#selected-event-title"),
     selectedEventTime: $("#selected-event-time"),
@@ -68,12 +66,13 @@ import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, 
     evidenceGrid: $("#evidence-grid"),
     observationCopy: $("#observation-copy"),
     basisCopy: $("#basis-copy"),
+    basisSection: $("#basis-section"),
+    basisId: $("#basis-id"),
+    basisQuote: $("#basis-quote"),
+    sourceName: $("#source-name"),
     sourceLinkWrap: $("#source-link-wrap"),
     sourceLink: $("#source-link"),
     emptyResult: $("#empty-result"),
-    newCheck: $("#new-check"),
-    rulesView: $("#rules-view"),
-    rulesList: $("#rules-list"),
     helpView: $("#help-view"),
     apiView: $("#api-view"),
     failureView: $("#failure-view"),
@@ -90,11 +89,19 @@ import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, 
     originalVideoStatus: $("#original-video-status"),
   };
 
+  const player = createPlayer({
+    root: $("#player"),
+    video: elements.originalVideo,
+    onEpisode: (index) => selectEvent(index),
+  });
+
+  createApiDocs(elements.apiView);
+
   const viewElements = {
     upload: elements.uploadView,
     processing: elements.processingView,
     result: elements.resultView,
-    rules: elements.rulesView,
+    history: elements.historyView,
     help: elements.helpView,
     api: elements.apiView,
     failure: elements.failureView,
@@ -103,8 +110,8 @@ import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, 
   const viewTitles = {
     upload: "Проверка видео",
     processing: "Обработка видео",
-    result: "Результаты",
-    rules: "Основания",
+    result: "Результат проверки",
+    history: "Результаты",
     help: "Как это работает",
     api: "API",
     failure: "Проверка не завершена",
@@ -124,10 +131,12 @@ import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, 
     activeTaskController: null,
     pollDelayTimer: null,
     elapsedTimer: null,
+    previewUrl: null,
     originalVideoUrl: null,
     originalVideoUnsupported: false,
     pendingVideoSeek: null,
-    apiCheckRunning: false,
+    history: [],
+    lastCheck: null,
   };
 
   function setSidebarOpen(open) {
@@ -139,26 +148,13 @@ import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, 
     else if (window.matchMedia("(max-width: 1100px)").matches) elements.sidebarToggle.focus({ preventScroll: true });
   }
 
-  function getRuleEntries() {
-    if (state.result?.verdict !== "violation") return [];
-    return state.result.violations.map((event, index) => ({
-      event,
-      index,
-      ...splitDescription(event.description),
-    })).filter((entry) => entry.basis && entry.basis !== "Нормативное основание не указано в ответе анализа.");
-  }
 
   function showView(view) {
     for (const [name, element] of Object.entries(viewElements)) element.hidden = name !== view;
     const hasResult = Boolean(state.result);
-    const rules = getRuleEntries();
-    elements.sidebarSession.hidden = !hasResult || state.result?.verdict !== "violation";
-    elements.navResults.hidden = !hasResult;
-    elements.navRules.hidden = rules.length === 0;
-    elements.navResultCount.textContent = state.result?.violations?.length ? String(state.result.violations.length) : "";
-    elements.newCheck.hidden = !hasResult || !["result", "rules"].includes(view);
-    elements.activeSectionName.textContent = viewTitles[view] || viewTitles.upload;
-    const activeView = ["processing", "failure"].includes(view) ? "upload" : view;
+    elements.navResultCount.textContent = state.history.length ? String(state.history.length) : "";
+    document.title = `${viewTitles[view] || viewTitles.upload} · ForteBank`;
+    const activeView = ["processing", "failure"].includes(view) ? "upload" : view === "result" ? "history" : view;
     elements.navItems.forEach((button) => {
       const active = button.dataset.view === activeView;
       button.classList.toggle("is-active", active);
@@ -169,7 +165,7 @@ import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, 
       upload: $("#page-title"),
       processing: $("#processing-title"),
       result: $("#result-title"),
-      rules: $("#rules-title"),
+      history: $("#history-title"),
       help: $("#help-title"),
       api: $("#api-title"),
       failure: $("#failure-title"),
@@ -178,7 +174,7 @@ import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, 
   }
 
   function formatSize(bytes) {
-    return `${(bytes / (1024 * 1024)).toFixed(1)} МиБ`;
+    return `${(bytes / (1024 * 1024)).toFixed(1).replace(".", ",")} МБ`;
   }
 
   function formatTime(seconds) {
@@ -223,7 +219,7 @@ import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, 
     } else if (file.size > MAX_FILE_BYTES) {
       state.file = null;
       state.fileName = "";
-      setFileError("Размер файла превышает лимит формы — 64 МиБ. Выберите меньшую запись.");
+      setFileError("Файл больше 50 МБ. Выберите запись меньшего размера.");
     } else {
       state.file = file;
       state.fileName = file.name;
@@ -238,9 +234,6 @@ import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, 
     elements.fileName.textContent = selected ? state.file.name : "";
     elements.fileSize.textContent = selected ? formatSize(state.file.size) : "";
     elements.startButton.disabled = !selected || state.busy;
-    elements.uploadActionHint.textContent = selected
-      ? "Файл готов к отправке на сервер сервиса для анализа."
-      : "Выберите подходящий файл, чтобы начать проверку.";
   }
 
   function setBusy(busy) {
@@ -269,15 +262,49 @@ import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, 
   function uploadErrorMessage(status) {
     if (status === 400) return "Сервис не принял файл. Убедитесь, что это непустая видеозапись.";
     if (status === 408) return "Время загрузки истекло. Проверьте соединение и выберите файл ещё раз.";
-    if (status === 413) return "Файл больше допустимого размера, установленного сервисом. Выберите меньшую запись.";
+    if (status === 413) return "Файл больше 50 МБ. Выберите запись меньшего размера.";
     if (status === 415) return "Сервис принимает видеозаписи только в формате MOV.";
     if (status === 503) return "Очередь проверок занята. Попробуйте отправить запись немного позже.";
     return "Сервис временно недоступен. Попробуйте ещё раз позднее.";
   }
 
+  function clearProcessPreview() {
+    elements.processVideo.removeAttribute("src");
+    elements.processVideo.load();
+    if (state.previewUrl) URL.revokeObjectURL(state.previewUrl);
+    state.previewUrl = null;
+  }
+
+  function showProcessPreview(file) {
+    clearProcessPreview();
+    elements.processingMeta.textContent = file ? formatSize(file.size) : "";
+    if (!file) return;
+    state.previewUrl = URL.createObjectURL(file);
+    const video = elements.processVideo;
+    video.onloadedmetadata = () => {
+      const parts = [formatSize(file.size)];
+      if (Number.isFinite(video.duration)) parts.push(formatClock(video.duration));
+      if (video.videoWidth) parts.push(`${video.videoWidth}×${video.videoHeight}`);
+      elements.processingMeta.textContent = parts.join(" · ");
+      if (Number.isFinite(video.duration)) video.currentTime = Math.min(1, video.duration / 3);
+    };
+    video.src = state.previewUrl;
+  }
+
+  function setUploadProgress(loaded, total) {
+    const percent = total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : 0;
+    elements.processBarFill.style.width = `${percent}%`;
+    elements.processBar.setAttribute("aria-valuenow", String(percent));
+    elements.uploadProgressText.textContent = percent >= 100
+      ? `${formatSize(total)} отправлено`
+      : `${formatSize(loaded)} из ${formatSize(total)} · ${percent}%`;
+  }
+
   function showProcessing(fileName, stage) {
     elements.processingFile.textContent = fileName;
-    elements.jobReference.hidden = true;
+    showProcessPreview(state.file);
+    elements.processBarFill.style.width = "0%";
+    elements.uploadProgressText.textContent = "Подготовка";
     elements.connectionNote.hidden = true;
     elements.connectionNote.textContent = "";
     setProcessingStage(stage);
@@ -336,9 +363,19 @@ import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, 
 
   function setProcessingStage(stage) {
     const uploading = stage === "uploading";
+    elements.processingTitle.textContent = uploading ? "Загружаем видео" : "Анализируем видео";
     elements.processingStage.textContent = uploading
-      ? "Загружаем файл на сервис…"
-      : "Файл принят. Идёт анализ видео…";
+      ? "Загружаем файл на сервис"
+      : "Файл принят, идёт анализ видео";
+    elements.processPreview.dataset.stage = stage;
+    elements.processBar.classList.toggle("is-indeterminate", !uploading);
+    elements.processBar.setAttribute("aria-label", uploading ? "Загрузка файла" : "Анализ видео");
+    if (uploading) elements.processBar.setAttribute("aria-valuenow", "0");
+    else {
+      elements.processBar.removeAttribute("aria-valuenow");
+      elements.processBarFill.style.width = "";
+      if (elements.uploadProgressText.textContent === "Подготовка") elements.uploadProgressText.textContent = "Файл принят";
+    }
     elements.processingSteps.forEach((step, index) => {
       const current = uploading ? index === 0 : index === 1;
       const completed = uploading ? false : index === 0;
@@ -429,6 +466,7 @@ import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, 
       state.result = payload;
       setBusy(false);
       renderResult();
+      void rememberCheck(payload);
       return;
     }
     state.canResume = true;
@@ -451,14 +489,17 @@ import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, 
     formData.append("file", file, file.name);
     try {
       const remaining = Math.max(1000, deadline - Date.now());
-      const { response, payload: accepted } = await fetchJsonWithTimeout("/ui-api/analyze", { method: "POST", body: formData, headers: { Accept: "application/json" } }, remaining, signal);
+      const { response, payload: accepted } = await uploadWithProgress("/ui-api/analyze", formData, {
+        timeoutMs: remaining,
+        signal,
+        onProgress: (loaded, total) => { if (isCurrentTask(generation)) setUploadProgress(loaded, total); },
+      });
       if (!isCurrentTask(generation)) return;
       if (!response.ok) throw new Error(uploadErrorMessage(response.status));
       if (!isJobAccepted(accepted)) throw new Error("Сервис не подтвердил приём задания.");
       state.jobId = accepted.job_id;
+      setUploadProgress(file.size, file.size);
       setProcessingStage("analyzing");
-      elements.jobReference.textContent = `Номер проверки: ${accepted.job_id}`;
-      elements.jobReference.hidden = false;
       await pollJob(accepted.job_id, deadline, generation, signal);
     } catch (error) {
       if (!isCurrentTask(generation)) return;
@@ -482,8 +523,6 @@ import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, 
     state.canResume = false;
     state.failureKind = "connection";
     showProcessing(state.fileName, "analyzing");
-    elements.jobReference.textContent = `Номер проверки: ${state.jobId}`;
-    elements.jobReference.hidden = false;
     try {
       await pollJob(state.jobId, Date.now() + JOB_DEADLINE_MS, generation, signal);
     } catch (error) {
@@ -492,6 +531,21 @@ import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, 
       showFailure(error instanceof Error && error.message ? error.message : "Не удалось связаться с сервисом.");
     }
     if (isCurrentTask(generation) && state.result) finishTask(generation);
+  }
+
+  // Russian typesetting: keep short prepositions with the next word and «пункт 22» together.
+  const SHORT_WORDS = /(^|[\s(«„"])(в|во|и|с|со|к|ко|о|об|у|а|но|на|по|до|от|из|за|не|ни|для|при|без|под|над|или)[^\S\u00A0]+/giu;
+  const NUMBERED = /(параграф|пункт|подпункт|абзац|часть|статья|глава|постановлени[еяю]|№|п\.|пп\.|ч\.|ст\.)\s+(?=\d)/giu;
+  function typeset(text) {
+    let result = String(text ?? "");
+    for (let pass = 0; pass < 2; pass += 1) result = result.replace(SHORT_WORDS, "$1$2\u00A0");
+    return result.replace(NUMBERED, "$1\u00A0").replace(/(\d)\s+(?=(?:г\.|года|№))/gu, "$1\u00A0").replace(/\s+—/gu, "\u00A0—");
+  }
+
+  // Backend basis format: «<title>; <section> (ID: <rule_id>)».
+  function parseBasis(basis) {
+    const match = /^(.*?);\s*(.*?)\s*\(ID:\s*([^)]+)\)\s*$/su.exec(basis);
+    return match ? { title: match[1].trim(), section: match[2].trim(), id: match[3].trim() } : { title: basis, section: "", id: "" };
   }
 
   function splitDescription(description) {
@@ -518,36 +572,147 @@ import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, 
     };
   }
 
-  function episodeHeading(count) {
-    const words = { 1: "Один эпизод", 2: "Два эпизода", 3: "Три эпизода", 4: "Четыре эпизода" };
-    return words[count] || `${count} эпизодов`;
+
+
+  function plural(count, one, few, many) {
+    const mod10 = count % 10;
+    const mod100 = count % 100;
+    if (mod10 === 1 && mod100 !== 11) return one;
+    if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
+    return many;
   }
 
-  function renderRuleList() {
-    const entries = getRuleEntries();
-    elements.rulesList.replaceChildren();
-    entries.forEach(({ event, index, basis, sourceUrl }) => {
-      const card = document.createElement("article");
-      card.className = "rule-card";
-      const meta = document.createElement("p");
-      meta.className = "rule-card-meta";
-      meta.textContent = `${formatClock(event.timecode_sec)} · ${event.type}`;
-      const title = document.createElement("h2");
-      title.textContent = basis;
-      const description = document.createElement("p");
-      description.className = "rule-card-description";
-      description.textContent = `Указано для эпизода ${index + 1} в последнем результате проверки.`;
-      card.append(meta, title, description);
-      if (sourceUrl) {
-        const link = document.createElement("a");
-        link.href = sourceUrl;
-        link.target = "_blank";
-        link.rel = "noopener noreferrer";
-        link.textContent = "Открыть источник ↗";
-        card.append(link);
+  const historyDate = new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+
+  // A small poster frame for the history list, taken from the local preview; the video itself is never stored.
+  function captureThumbnail() {
+    const video = elements.processVideo;
+    if (!video.videoWidth || video.readyState < 2) return "";
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.height = 156;
+      canvas.width = Math.round((video.videoWidth / video.videoHeight) * canvas.height);
+      canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL("image/jpeg", 0.72);
+    } catch {
+      return "";
+    }
+  }
+
+  async function rememberCheck(result) {
+    const video = elements.processVideo;
+    const entry = {
+      id: result.job_id,
+      fileName: state.fileName,
+      size: state.file?.size ?? 0,
+      duration: Number.isFinite(video.duration) ? video.duration : null,
+      width: video.videoWidth || null,
+      height: video.videoHeight || null,
+      checkedAt: Date.now(),
+      verdict: result.verdict,
+      violationCount: result.violations.length,
+      thumbnail: captureThumbnail(),
+      result,
+    };
+    state.lastCheck = { id: entry.id, file: state.file };
+    await saveCheck(entry);
+    await refreshHistory();
+  }
+
+  async function refreshHistory() {
+    state.history = await listChecks();
+    elements.navResultCount.textContent = state.history.length ? String(state.history.length) : "";
+    if (!elements.historyView.hidden) renderHistory();
+  }
+
+  function historyIcon(paths) {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("aria-hidden", "true");
+    for (const d of paths) {
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", d);
+      svg.append(path);
+    }
+    return svg;
+  }
+
+  function renderHistory() {
+    const items = state.history;
+    elements.historyEmpty.hidden = items.length > 0;
+    elements.historyClear.hidden = items.length === 0;
+    elements.historyList.replaceChildren(...items.map((entry) => {
+      const li = document.createElement("li");
+      li.className = "history-item";
+      const open = document.createElement("button");
+      open.type = "button";
+      open.className = "history-open";
+      open.disabled = state.busy;
+      const thumb = document.createElement("span");
+      thumb.className = "history-thumb";
+      if (entry.thumbnail) {
+        const img = document.createElement("img");
+        img.src = entry.thumbnail;
+        img.alt = "";
+        thumb.append(img);
+      } else {
+        thumb.append(historyIcon(["m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5", "M4 6h10a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z"]));
       }
-      elements.rulesList.append(card);
-    });
+      const main = document.createElement("span");
+      main.className = "history-main";
+      const name = document.createElement("strong");
+      name.textContent = entry.fileName || "Видео без имени";
+      const meta = document.createElement("span");
+      meta.className = "history-meta";
+      meta.textContent = [
+        historyDate.format(entry.checkedAt),
+        entry.size ? formatSize(entry.size) : null,
+        entry.duration ? formatClock(entry.duration) : null,
+      ].filter(Boolean).join(" · ");
+      main.append(name, meta);
+      const verdict = document.createElement("span");
+      const clean = entry.verdict !== "violation";
+      verdict.className = `history-verdict ${clean ? "is-clean" : "is-violation"}`;
+      verdict.textContent = clean
+        ? "Нарушений нет"
+        : `${entry.violationCount} ${plural(entry.violationCount, "эпизод", "эпизода", "эпизодов")}`;
+      open.append(thumb, main, verdict);
+      open.setAttribute("aria-label", `${name.textContent}, ${meta.textContent}, ${verdict.textContent}`);
+      open.addEventListener("click", () => openHistoryEntry(entry));
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "history-delete icon-button";
+      remove.setAttribute("aria-label", `Удалить «${name.textContent}» из истории`);
+      remove.title = "Удалить из истории";
+      remove.append(historyIcon(["M3 6h18", "M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6", "M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2", "M10 11v6", "M14 11v6"]));
+      remove.addEventListener("click", async () => {
+        await deleteCheck(entry.id);
+        await refreshHistory();
+        renderHistory();
+      });
+      li.append(open, remove);
+      return li;
+    }));
+  }
+
+  function showHistory() {
+    renderHistory();
+    showView("history");
+  }
+
+  function openHistoryEntry(entry) {
+    if (state.busy) return;
+    cancelActiveTask();
+    clearOriginalVideoSource();
+    clearProcessPreview();
+    const sameFile = state.lastCheck?.id === entry.id ? state.lastCheck.file : null;
+    state.file = sameFile;
+    state.fileName = entry.fileName;
+    state.jobId = entry.id;
+    state.result = entry.result;
+    state.selectedEvent = 0;
+    renderResult();
+    window.scrollTo({ top: 0 });
   }
 
   function renderResult() {
@@ -556,47 +721,37 @@ import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, 
     elements.resultTitle.textContent = hasEvents ? "Разбор эпизодов" : "Проверка завершена";
     elements.resultSummary.textContent = hasEvents
       ? `Найдено эпизодов: ${result.violations.length}. Выберите эпизод в боковой панели, чтобы просмотреть доказательства.`
-      : "В обработанной записи система не отметила эпизоды с возможными признаками нарушений.";
-    elements.verdictBadge.textContent = hasEvents ? `${result.violations.length} ${result.violations.length === 1 ? "эпизод" : result.violations.length < 5 ? "эпизода" : "эпизодов"} для проверки` : "Признаки не найдены";
-    elements.verdictBadge.classList.toggle("has-events", hasEvents);
+      : "";
+    elements.resultSummary.hidden = !hasEvents;
     elements.emptyResult.hidden = hasEvents;
     elements.eventsLayout.hidden = !hasEvents;
     showOriginalVideo();
-    elements.resultFileName.textContent = state.fileName;
-    elements.navResultCount.textContent = hasEvents ? String(result.violations.length) : "0";
-    renderRuleList();
+    player.setEpisodes(hasEvents ? result.violations : [], hasEvents ? Math.min(state.selectedEvent, result.violations.length - 1) : -1);
 
     if (!hasEvents) {
       showView("result");
       return;
     }
 
-    elements.eventsTitle.textContent = episodeHeading(result.violations.length);
-    elements.eventList.replaceChildren();
-    result.violations.forEach((violation, index) => {
+    // Without the local video (a check reopened from history) the player is hidden, so episodes switch here.
+    elements.eventList.hidden = Boolean(state.file) || result.violations.length < 2;
+    elements.eventList.replaceChildren(...result.violations.map((violation, index) => {
       const button = document.createElement("button");
       button.type = "button";
-      button.className = "event-item";
+      button.className = "episode-tab";
       button.setAttribute("aria-pressed", String(index === state.selectedEvent));
-      button.setAttribute("aria-label", `${formatClock(violation.timecode_sec)}. ${violation.type}`);
+      const number = document.createElement("span");
+      number.className = "episode-tab-number";
+      number.textContent = String(index + 1);
       const time = document.createElement("span");
-      time.className = "event-time";
+      time.className = "episode-tab-time";
       time.textContent = formatClock(violation.timecode_sec);
-      const copy = document.createElement("span");
-      copy.className = "event-item-copy";
-      const title = document.createElement("strong");
-      title.textContent = violation.type;
-      const evidenceCount = document.createElement("span");
-      evidenceCount.textContent = `${violation.evidence_frames.length} ${violation.evidence_frames.length === 1 ? "кадр" : violation.evidence_frames.length < 5 ? "кадра" : "кадров"}`;
-      copy.append(title, evidenceCount);
-      button.append(time, copy);
-      button.addEventListener("click", () => {
-        selectEvent(index);
-        showView("result");
-        setSidebarOpen(false);
-      });
-      elements.eventList.append(button);
-    });
+      button.append(number, time);
+      button.setAttribute("aria-label", `Эпизод ${index + 1}, ${formatClock(violation.timecode_sec)}: ${violation.type}`);
+      button.title = violation.type;
+      button.addEventListener("click", () => selectEvent(index));
+      return button;
+    }));
     selectEvent(Math.min(state.selectedEvent, result.violations.length - 1));
     showView("result");
   }
@@ -605,16 +760,27 @@ import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, 
     if (!state.result || !state.result.violations[index]) return;
     state.selectedEvent = index;
     const event = state.result.violations[index];
+    player.setActive(index);
     seekOriginalVideo(event.timecode_sec);
-    elements.eventList.querySelectorAll(".event-item").forEach((button, buttonIndex) => {
+    elements.eventList.querySelectorAll(".episode-tab").forEach((button, buttonIndex) => {
       button.setAttribute("aria-pressed", String(buttonIndex === index));
     });
-    elements.selectedEventTitle.textContent = event.type;
+    elements.selectedEventTitle.textContent = typeset(event.type);
     elements.selectedEventTime.textContent = formatTime(event.timecode_sec);
     elements.frameCount.textContent = `${event.evidence_frames.length} ${event.evidence_frames.length === 1 ? "кадр" : event.evidence_frames.length < 5 ? "кадра" : "кадров"}`;
     const details = splitDescription(event.description);
-    elements.observationCopy.textContent = details.observation;
-    elements.basisCopy.textContent = details.basis;
+    elements.observationCopy.textContent = typeset(details.observation);
+    const basis = parseBasis(details.basis);
+    elements.basisCopy.textContent = typeset(basis.title);
+    elements.basisSection.textContent = typeset(basis.section);
+    elements.basisSection.hidden = !basis.section;
+    elements.basisId.textContent = basis.id;
+    elements.basisId.hidden = !basis.id;
+    const norm = NORMS[basis.id];
+    elements.basisQuote.textContent = norm ? `«${typeset(norm.quote)}»` : "";
+    elements.basisQuote.hidden = !norm;
+    elements.sourceName.textContent = norm?.short ?? "Текст нормы";
+    elements.sourceLink.title = norm?.document ?? "";
     elements.sourceLinkWrap.hidden = !details.sourceUrl;
     if (details.sourceUrl) elements.sourceLink.href = details.sourceUrl;
     else elements.sourceLink.removeAttribute("href");
@@ -670,6 +836,12 @@ import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, 
     else elements.imageDialog.setAttribute("open", "");
   }
 
+  // Routine player states are announced to screen readers only; problems are shown on screen.
+  function setVideoStatus(text, visible) {
+    elements.originalVideoStatus.textContent = text;
+    elements.originalVideoStatus.classList.toggle("visually-hidden", !visible);
+  }
+
   function showOriginalVideo() {
     if (!state.file) {
       elements.originalVideoCard.hidden = true;
@@ -681,7 +853,7 @@ import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, 
     state.originalVideoUrl = URL.createObjectURL(state.file);
     elements.originalVideo.src = state.originalVideoUrl;
     elements.originalVideo.hidden = false;
-    elements.originalVideoStatus.textContent = "Плеер использует выбранный файл в браузере. Этот файл уже передан серверу для анализа; кадры результата доступны ниже независимо от поддержки MOV.";
+    setVideoStatus("Плеер использует выбранный файл в браузере. Этот файл уже передан серверу для анализа; кадры результата доступны ниже независимо от поддержки MOV.", false);
     elements.originalVideo.load();
   }
 
@@ -690,28 +862,29 @@ import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, 
     state.pendingVideoSeek = seconds;
     showOriginalVideo();
     if (state.originalVideoUnsupported) {
-      elements.originalVideoStatus.textContent = "Этот браузер не поддерживает воспроизведение данного MOV или его кодека. Сверьте кадры эпизода ниже.";
+      setVideoStatus("Этот браузер не поддерживает воспроизведение данного MOV или его кодека. Сверьте кадры эпизода ниже.", true);
       return;
     }
     if (elements.originalVideo.readyState < 1) {
-      elements.originalVideoStatus.textContent = `Подготавливаем плеер для перехода к ${formatTime(seconds)}. Кадры эпизода доступны ниже.`;
+      setVideoStatus(`Подготавливаем плеер для перехода к ${formatTime(seconds)}. Кадры эпизода доступны ниже.`, false);
       return;
     }
     const duration = elements.originalVideo.duration;
     if (!Number.isFinite(duration) || seconds > duration) {
-      elements.originalVideoStatus.textContent = `Плеер не смог перейти к ${formatTime(seconds)}. Сверьте кадры эпизода ниже.`;
+      setVideoStatus(`Плеер не смог перейти к ${formatTime(seconds)}. Сверьте кадры эпизода ниже.`, true);
       return;
     }
     try {
       elements.originalVideo.currentTime = seconds;
       state.pendingVideoSeek = null;
-      elements.originalVideoStatus.textContent = `Плеер установлен на ${formatTime(seconds)}. Кадры доказательств доступны ниже.`;
+      setVideoStatus(`Плеер установлен на ${formatTime(seconds)}. Кадры доказательств доступны ниже.`, false);
     } catch {
-      elements.originalVideoStatus.textContent = `Браузер не поддержал переход к ${formatTime(seconds)}. Сверьте кадры эпизода ниже.`;
+      setVideoStatus(`Браузер не поддержал переход к ${formatTime(seconds)}. Сверьте кадры эпизода ниже.`, true);
     }
   }
 
   function clearOriginalVideoSource() {
+    player.reset();
     elements.originalVideo.pause();
     elements.originalVideo.removeAttribute("src");
     elements.originalVideo.load();
@@ -726,6 +899,7 @@ import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, 
   function resetToUpload() {
     cancelActiveTask();
     clearOriginalVideoSource();
+    clearProcessPreview();
     state.file = null;
     state.fileName = "";
     state.jobId = null;
@@ -738,7 +912,6 @@ import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, 
     elements.emptyResult.hidden = true;
     elements.eventsLayout.hidden = true;
     elements.eventList.replaceChildren();
-    elements.rulesList.replaceChildren();
     elements.evidenceGrid.replaceChildren();
     setFileError("");
     renderSelectedFile();
@@ -746,103 +919,23 @@ import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, 
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  function renderApiExamples() {
-    // The app and API share an origin in the current deployment; no separate API URL setting exists.
-    // TODO(api-base-url): expose a safe runtime base URL only if a future deployment separates frontend and backend origins.
-    const baseUrl = window.location.origin;
-    elements.apiBaseUrl.textContent = baseUrl;
-    elements.apiRequestExample.textContent = [
-      'curl.exe -X POST "' + baseUrl + '/api/v1/analyze" `',
-      '  -H "X-API-Key: $env:FORTE_API_KEY" `',
-      '  -F "file=@C:/path/to/video.mov"',
-      '',
-      'curl.exe -H "X-API-Key: $env:FORTE_API_KEY" "' + baseUrl + '/api/v1/jobs/<job_id>"',
-    ].join("\n");
-  }
 
-  function showApiHealth(stateName, title, message, checks = null) {
-    elements.apiHealth.dataset.state = stateName;
-    elements.apiHealthHeading.textContent = title;
-    elements.apiHealthMessage.textContent = message;
-    elements.apiHealthChecks.hidden = !checks;
-    if (!checks) return;
-    elements.apiHealthChecks.querySelectorAll("[data-check]").forEach((item) => {
-      const ready = checks[item.dataset.check] === true;
-      item.textContent = ready ? "Готово" : "Не готово";
-      item.dataset.ready = String(ready);
-    });
-  }
 
-  async function checkApiConnection() {
-    if (state.apiCheckRunning) return;
-    state.apiCheckRunning = true;
-    elements.apiCheckButton.disabled = true;
-    elements.apiCheckButton.textContent = "Проверяем…";
-    elements.apiHealth.setAttribute("aria-busy", "true");
-    showApiHealth("checking", "Проверяем соединение", "Выполняется безопасный GET /health/ready без API-ключа.");
-    try {
-      const { response, payload } = await fetchReadiness(HEALTH_TIMEOUT_MS);
-      if (!isHealthResponse(payload)) {
-        showApiHealth("response-error", "Ошибка ответа API", "Сервер ответил в неожиданном формате. Повторите проверку позже.");
-      } else if (response.status === 200 && payload.status === "ready") {
-        showApiHealth("ready", "API доступен · сервис готов", "Health endpoint подтвердил готовность всех проверяемых компонентов.", payload.checks);
-      } else if (response.status === 503 && payload.status === "not_ready") {
-        showApiHealth("not-ready", "API отвечает, но не готов к анализу", "Backend вернул HTTP 503. Проверки ниже показывают, какие компоненты пока не готовы.", payload.checks);
-      } else {
-        showApiHealth("response-error", "Ошибка ответа API", `Неожиданный HTTP-статус: ${response.status}.`);
-      }
-    } catch (error) {
-      if (error?.name === "AbortError") {
-        showApiHealth("unavailable", "API недоступен", "Сервер не ответил за 8 секунд. Проверьте соединение и повторите запрос.");
-      } else if (error instanceof TypeError) {
-        showApiHealth("unavailable", "API недоступен", "Не удалось соединиться с сервером. Проверьте подключение и повторите запрос.");
-      } else {
-        showApiHealth("response-error", "Ошибка ответа API", "Не удалось обработать ответ. Повторите проверку позже.");
-      }
-    } finally {
-      state.apiCheckRunning = false;
-      elements.apiHealth.removeAttribute("aria-busy");
-      elements.apiCheckButton.disabled = false;
-      elements.apiCheckButton.textContent = "Проверить соединение";
-    }
-  }
 
-  async function copyApiRequest() {
-    const text = elements.apiRequestExample.textContent;
-    try {
-      if (navigator.clipboard?.writeText && window.isSecureContext) {
-        await navigator.clipboard.writeText(text);
-      } else {
-        const temporary = document.createElement("textarea");
-        temporary.value = text;
-        temporary.setAttribute("readonly", "");
-        temporary.style.position = "fixed";
-        temporary.style.opacity = "0";
-        document.body.append(temporary);
-        temporary.select();
-        const copied = document.execCommand("copy");
-        temporary.remove();
-        if (!copied) throw new Error("Clipboard unavailable");
-      }
-      elements.apiCopyMessage.textContent = "Пример запроса скопирован. Укажите свой ключ в переменной FORTE_API_KEY.";
-      elements.apiCopyMessage.hidden = false;
-    } catch {
-      elements.apiCopyMessage.textContent = "Не удалось скопировать автоматически. Выделите текст примера и скопируйте его вручную.";
-      elements.apiCopyMessage.hidden = false;
-    }
-  }
 
   elements.sidebarToggle.addEventListener("click", () => setSidebarOpen(true));
   elements.sidebarClose.addEventListener("click", () => setSidebarOpen(false));
   elements.sidebarBackdrop.addEventListener("click", () => setSidebarOpen(false));
   elements.navItems.forEach((button) => button.addEventListener("click", () => {
     const view = button.dataset.view;
-    if (state.busy && view === "upload") return;
-    if (view === "result" && !state.result) return;
-    if (view === "rules" && getRuleEntries().length === 0) return;
+    if (state.busy && view === "upload") {
+      showView("processing");
+      setSidebarOpen(false);
+      return;
+    }
     if (view === "upload" && state.result) resetToUpload();
+    else if (view === "history") showHistory();
     else showView(view);
-    if (view === "api") void checkApiConnection();
     setSidebarOpen(false);
   }));
   window.addEventListener("keydown", (event) => {
@@ -887,19 +980,26 @@ import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, 
     event.preventDefault();
     startCheck(state.file);
   });
-  elements.apiCheckButton.addEventListener("click", checkApiConnection);
-  elements.apiCopyRequest.addEventListener("click", copyApiRequest);
-  elements.newCheck.addEventListener("click", resetToUpload);
   elements.failureNewCheck.addEventListener("click", resetToUpload);
+  elements.resultBack.addEventListener("click", showHistory);
+  elements.historyStart.addEventListener("click", () => (state.busy ? showView("processing") : resetToUpload()));
+  elements.historyClear.addEventListener("click", async () => {
+    if (!window.confirm("Удалить все результаты из истории этого браузера?")) return;
+    await clearChecks();
+    state.lastCheck = null;
+    await refreshHistory();
+    renderHistory();
+  });
+  void refreshHistory();
   elements.resumeCheck.addEventListener("click", resumeCheck);
   elements.originalVideo.addEventListener("loadedmetadata", () => {
     if (state.pendingVideoSeek !== null) seekOriginalVideo(state.pendingVideoSeek);
-    else elements.originalVideoStatus.textContent = "Плеер готов. При выборе эпизода он попробует перейти к таймкоду; кадры доступны ниже.";
+    else setVideoStatus("Плеер готов. При выборе эпизода он попробует перейти к таймкоду; кадры доступны ниже.", false);
   });
   elements.originalVideo.addEventListener("error", () => {
     state.originalVideoUnsupported = true;
     elements.originalVideo.hidden = true;
-    elements.originalVideoStatus.textContent = "Этот браузер не поддерживает воспроизведение данного MOV или его кодека. Откройте кадры доказательств ниже.";
+    setVideoStatus("Этот браузер не поддерживает воспроизведение данного MOV или его кодека. Откройте кадры доказательств ниже.", true);
   });
   elements.closeDialog.addEventListener("click", () => elements.imageDialog.close());
   elements.imageDialog.addEventListener("click", (event) => {
@@ -917,7 +1017,6 @@ import { fetchJsonWithTimeout, fetchReadiness, isHealthResponse, isJobAccepted, 
     elements.dropArea.classList.remove("is-dragging");
     chooseFile(event.dataTransfer?.files?.[0]);
   });
-  renderApiExamples();
   window.addEventListener("beforeunload", (event) => {
     if (!state.busy) return;
     event.preventDefault();
