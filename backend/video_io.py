@@ -49,6 +49,22 @@ class VideoFrame:
     height: int
 
 
+# FFmpeg's expression parser rejects select expressions with more than 100 terms
+# (verified with FFmpeg 9.0.2: 100 parse, 101 fail), so requests are split.
+_MAX_SELECT_TERMS = 90
+
+
+def _select_chunks(indices: list[int]) -> list[list[tuple[int, int]]]:
+    """Sorted unique indices -> chunks of inclusive runs, at most _MAX_SELECT_TERMS runs each."""
+    runs: list[tuple[int, int]] = []
+    for index in indices:
+        if runs and index == runs[-1][1] + 1:
+            runs[-1] = (runs[-1][0], index)
+        else:
+            runs.append((index, index))
+    return [runs[i:i + _MAX_SELECT_TERMS] for i in range(0, len(runs), _MAX_SELECT_TERMS)]
+
+
 def _number(value: object) -> float | None:
     try:
         result = float(value)  # type: ignore[arg-type]
@@ -277,25 +293,33 @@ class VideoIO:
         if missing:
             # Frame ordinal is used only to select the frame whose actual PTS was
             # enumerated by ffprobe; ordinal / assumed FPS is never a timecode.
-            expression = "+".join(f"eq(n\\,{index})" for index in missing)
-            output = self._run([
-                self.ffmpeg_bin, "-hide_banner", "-loglevel", "error", "-nostdin",
-                "-xerror", "-err_detect", "explode", "-protocol_whitelist", "file,pipe",
-                "-format_whitelist", "mov", "-enable_drefs", "0", "-use_absolute_path", "0",
-                "-i", str(self.path), "-map", "0:v:0", "-an", "-sn", "-dn",
-                "-vf", f"select={expression}", "-fps_mode", "passthrough",
-                "-frames:v", str(len(missing)), "-c:v", "mjpeg", "-q:v", "2", "-f", "image2pipe", "pipe:1",
-            ])
             images: list[bytes] = []
-            offset = 0
-            while offset < len(output):
-                if output[offset:offset + 2] != b"\xff\xd8":
-                    raise VideoError("Decoder returned invalid JPEG evidence")
-                end = output.find(b"\xff\xd9", offset + 2)
-                if end < 0:
-                    raise VideoError("Decoder returned a truncated JPEG")
-                images.append(output[offset:end + 2])
-                offset = end + 2
+            for chunk in _select_chunks(missing):
+                expression = "+".join(
+                    f"eq(n\\,{a})" if a == b else f"between(n\\,{a}\\,{b})" for a, b in chunk
+                )
+                count = sum(b - a + 1 for a, b in chunk)
+                output = self._run([
+                    self.ffmpeg_bin, "-hide_banner", "-loglevel", "error", "-nostdin",
+                    "-xerror", "-err_detect", "explode", "-protocol_whitelist", "file,pipe",
+                    "-format_whitelist", "mov", "-enable_drefs", "0", "-use_absolute_path", "0",
+                    "-i", str(self.path), "-map", "0:v:0", "-an", "-sn", "-dn",
+                    "-vf", f"select={expression}", "-fps_mode", "passthrough",
+                    "-frames:v", str(count), "-c:v", "mjpeg", "-q:v", "2", "-f", "image2pipe", "pipe:1",
+                ])
+                chunk_images: list[bytes] = []
+                offset = 0
+                while offset < len(output):
+                    if output[offset:offset + 2] != b"\xff\xd8":
+                        raise VideoError("Decoder returned invalid JPEG evidence")
+                    end = output.find(b"\xff\xd9", offset + 2)
+                    if end < 0:
+                        raise VideoError("Decoder returned a truncated JPEG")
+                    chunk_images.append(output[offset:end + 2])
+                    offset = end + 2
+                if len(chunk_images) != count:
+                    raise VideoError("Decoder did not return every requested frame")
+                images.extend(chunk_images)
             if len(images) != len(missing):
                 raise VideoError("Decoder did not return every requested frame")
             for index, jpeg in zip(missing, images):

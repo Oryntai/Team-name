@@ -128,3 +128,15 @@ def test_longest_case_duration_can_be_fully_decoded(tmp_path):
     frames = video.sample_frames(30)
     assert len(frames) == 5
     assert frames[-1].timestamp_sec == pytest.approx(120)
+
+
+def test_long_irregular_frame_request_is_split_for_ffmpeg_expression_limit(tmp_path):
+    """FFmpeg rejects select expressions over 100 terms; 250 isolated frames must still decode."""
+    ffmpeg, _ = ffmpeg_tools()
+    video = video_io(make_video(tmp_path / "long.mov", ffmpeg, duration=60.0, rate=10))
+    pts = video.probe().frame_pts
+    wanted = [pts[i] for i in range(0, 500, 2)] + [pts[i] for i in range(520, 560)]  # 250 одиночных + один подряд
+    frames = video.frames_at(wanted[:256])
+    assert [f.timestamp_sec for f in frames] == pytest.approx(wanted[:256])
+    frames = video.frames_at(wanted[256:])
+    assert [f.timestamp_sec for f in frames] == pytest.approx(wanted[256:])
