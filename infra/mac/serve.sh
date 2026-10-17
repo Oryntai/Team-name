@@ -77,7 +77,9 @@ pending_jobs() {
 }
 
 run_tests() {
-  "$PY" -m pytest -q -p no:cacheprovider backend/tests decision/tests data_tools rules/test_catalog.py vision/tests \
+  # Чистое окружение: боевые FORTE_* (production, ключ, фабрики) ломают тесты, которые создают Settings().
+  env -i HOME="$HOME" PATH="$PATH" LANG="${LANG:-en_US.UTF-8}" PYTHONPATH="$PYTHONPATH" \
+    "$PY" -m pytest -q -p no:cacheprovider backend/tests decision/tests data_tools rules/test_catalog.py vision/tests \
     >>"$LOG_DIR/deploy-tests.log" 2>&1
 }
 
