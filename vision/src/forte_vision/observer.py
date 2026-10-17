@@ -253,6 +253,8 @@ def analyze_video(
     # 6. перепроверка
     t0 = time.monotonic()
     rechecked: dict[int, tuple[dict, dict, list[float]]] = {}
+    item_seen: dict[int, list[str]] = {}
+    vetoed: dict[int, list[str]] = {}
     names_p, names_v = list(predicates.PREDICATES), list(predicates.VISIBILITY)
     table = {**predicates.PREDICATES, **predicates.VISIBILITY}
     q_pred = predicates.predicate_question(names_p + names_v, table)
@@ -262,13 +264,23 @@ def analyze_video(
         times = sorted(set(np.linspace(c.start, c.end, prof.recheck_frames).round(3).tolist()) | {round(c.main, 3)})
         frames = src.grab_at(times, size=prof.recheck_size)
         question = q_pred
-        if detector is not None and prof.role_marks and sc is not None and sc.cashier_slot is not None:
-            frames_for_vlm = scene.mark_roles(frames, detector.detect(frames), sc.cashier_slot)
+        dets = detector.detect(frames) if detector is not None else None
+        if dets is not None and prof.role_marks and sc is not None and sc.cashier_slot is not None:
+            frames_for_vlm = scene.mark_roles(frames, dets, sc.cashier_slot)
             question = ROLE_HINT + q_pred
         else:
             frames_for_vlm = frames
         ans = backend.ask(frames_for_vlm, question, max_tokens=480)
         tri = predicates.parse_tri_state(ans.text, names_p + names_v)
+        if dets is not None:
+            seen_items = {name for d in dets for name, _ in d.objects if name in scene.ITEMS}
+            item_seen[id(c)] = sorted(seen_items)
+            # Предметные признаки VLM подтверждаются детектором на тех же кадрах: без найденного
+            # объекта утверждение "ясно видно" не принимается (частая галлюцинация чашки/сумки).
+            for name, classes in predicates.DETECTOR_BACKED.items():
+                if tri.get(name) == "observed" and not seen_items & classes:
+                    tri[name] = "not_observed"
+                    vetoed.setdefault(id(c), []).append(name)
         rechecked[id(c)] = ({n: tri[n] for n in names_p}, {n: tri[n] for n in names_v}, [t for t, _ in frames])
     mark("recheck", t0)
 
@@ -305,7 +317,8 @@ def analyze_video(
             }
         )
         diag_cands[cid] = {"kinds": sorted(c.kinds), "priority": round(c.priority, 3),
-                           "motion_score": round(c.motion_score, 5), "rechecked": id(c) in rechecked}
+                           "motion_score": round(c.motion_score, 5), "rechecked": id(c) in rechecked,
+                           "detected_items": item_seen.get(id(c), []), "detector_veto": vetoed.get(id(c), [])}
 
     all_rechecked = len(rechecked) == len(selected)
     obs = {

@@ -135,3 +135,40 @@ def test_empty_screen_window_is_incomplete_without_model_call(monkeypatch):
     )
     assert obs["analysis_status"] == "partial" and obs["coverage_complete"] is False
     assert diag["empty_screen_windows"] == 1 and backend.stats.calls == 0
+
+
+class _FakeDetector:
+    """Detector double: finds a cup on every frame or nothing at all."""
+
+    size = "fake"
+    device = "cpu"
+    threshold = 0.4
+
+    def __init__(self, items):
+        self.items = items
+
+    def detect(self, frames, batch=8):
+        from forte_vision.scene import FrameDets
+
+        return [FrameDets(t, [], [(name, (0.0, 0.0, 10.0, 10.0)) for name in self.items]) for t, _ in frames]
+
+
+def _drink_everywhere(times, question):
+    if "Categories:" in question:
+        return json.dumps([{"category": "food_or_drink", "start": EVENT[0], "end": EVENT[1]}])
+    answers = {n: "no" for n in [*PREDICATES, *VISIBILITY]}
+    answers["food_or_drink_at_desk"] = "yes"
+    return json.dumps(answers)
+
+
+def test_object_predicate_needs_detector_confirmation(synthetic_video):
+    obs, diag = analyze_video(synthetic_video, StubBackend(_drink_everywhere), video_id="syn",
+                              profile="fast", detector=_FakeDetector([]))
+    validate_observation(obs)
+    assert obs["candidates"]
+    assert all(c["predicates"]["food_or_drink_at_desk"] == "not_observed" for c in obs["candidates"])
+    assert any("food_or_drink_at_desk" in d["detector_veto"] for d in diag["candidates"].values())
+
+    obs, _ = analyze_video(synthetic_video, StubBackend(_drink_everywhere), video_id="syn",
+                           profile="fast", detector=_FakeDetector(["cup"]))
+    assert any(c["predicates"]["food_or_drink_at_desk"] == "observed" for c in obs["candidates"])

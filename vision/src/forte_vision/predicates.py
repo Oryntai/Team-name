@@ -33,6 +33,12 @@ PREDICATES: dict[str, str] = {
     "food_or_drink_at_desk": "A cup, glass, bottle, can or food is on the cashier's desk, or the cashier eats or drinks at the desk.",
 }
 
+# Предметные признаки, которые принимаются только если детектор (COCO) видит такой объект на тех же кадрах.
+DETECTOR_BACKED: dict[str, set[str]] = {
+    "food_or_drink_at_desk": {"cup", "bottle"},
+    "personal_items_on_desk": {"handbag", "backpack", "suitcase"},
+}
+
 VISIBILITY: dict[str, str] = {
     "counting_interval_fully_visible": "The whole counting action is visible in these frames (hands and banknotes are not hidden).",
     "all_possible_client_positions_visible": "Every place where a client could stand or sit at this desk is inside the frame.",
