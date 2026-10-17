@@ -393,6 +393,23 @@ def analyze_video(
     return obs, diag
 
 
+def _crop_frames(frames, boxes, margin: float = 0.25, min_side: int = 448):
+    """Крупная обрезка объекта (медианная рамка детектора) в исходном разрешении, увеличенная для VLM."""
+    arr = np.median(np.asarray(boxes, dtype=float), axis=0)
+    out = []
+    for t, im in frames:
+        w, h = im.size
+        x0, y0, x1, y1 = arr
+        mx, my = (x1 - x0) * margin, (y1 - y0) * margin
+        box = (max(0, int(x0 - mx)), max(0, int(y0 - my)), min(w, int(x1 + mx)), min(h, int(y1 + my)))
+        if box[2] - box[0] < 8 or box[3] - box[1] < 8:
+            return frames
+        crop = im.crop(box)
+        scale = max(1.0, min_side / min(crop.size))
+        out.append((t, crop.resize((int(crop.width * scale), int(crop.height * scale)))))
+    return out
+
+
 def _timeline_windows(dur: float, prof: Profile) -> list[tuple[float, float]]:
     win = max(prof.timeline_min_window_sec, dur / max(1, prof.timeline_max_windows))
     n = max(1, math.ceil(dur / win - 1e-9))
@@ -431,28 +448,50 @@ def _analyze_timeline(vid, src, info, backend, prof, deadline, timings, t_start,
     coverage_complete = covered == len(windows)
     violations = timeline.run_checklist(steps, dur) if coverage_complete else []
 
-    # Верификация: точный вопрос по плотным кадрам вокруг каждого найденного нарушения.
+    # Верификация в обе стороны: точный вопрос по плотным кадрам (крупная обрезка объекта, если
+    # детектор его нашёл) — снимает выдуманные нарушения и ловит пропущенные, когда таймлайн
+    # «увидел» правильный шаг (экран блокировки, закрытый сейф, пустой стол), которого не было.
     t0 = time.monotonic()
+
+    def verify_at(check: str, t_main: float) -> tuple[str, bool]:
+        lo, hi = timeline.VERIFY[check][2]
+        a, b = max(0.0, t_main + lo), min(dur, t_main + hi)
+        frames = src.grab_at([round(a + (k + 0.5) * (b - a) / prof.verify_frames, 3)
+                              for k in range(prof.verify_frames)], size=prof.timeline_size)
+        frames = [(t, im) for t, im in frames if t <= dur + 1e-6]
+        if not frames:
+            return "unclear", False
+        pts_pool.extend(t for t, _ in frames)
+        cropped = False
+        target = timeline.CROP_TARGET.get(check)
+        if detector is not None and target:
+            boxes = [b for d in detector.detect(frames) for name, b in d.objects if name in target]
+            if boxes:
+                frames, cropped = _crop_frames(frames, boxes), True
+        text = backend.ask(frames, timeline.verify_question(check), max_tokens=8).text
+        return timeline.parse_verdict(text), cropped
+
     verdicts, kept = [], []
     for v in violations:
         if time.monotonic() > deadline:
             kept.append(v)  # не успели проверить — оставляем как есть, пропуск хуже ложной тревоги
-            verdicts.append({"check": v.check, "answer": "not_run"})
+            verdicts.append({"check": v.check, "answer": "not_run", "mode": "confirm"})
             continue
-        lo, hi = timeline.VERIFY[v.check][2]
-        a, b = max(0.0, v.main_sec + lo), min(dur, v.main_sec + hi)
-        frames = src.grab_at([round(a + (k + 0.5) * (b - a) / prof.verify_frames, 3)
-                              for k in range(prof.verify_frames)], size=prof.timeline_size)
-        frames = [(t, im) for t, im in frames if t <= dur + 1e-6]
-        pts_pool.extend(t for t, _ in frames)
-        answer = timeline.parse_verdict(backend.ask(frames, timeline.verify_question(v.check), max_tokens=8).text) \
-            if frames else "unclear"
-        verdicts.append({"check": v.check, "answer": answer})
+        answer, cropped = verify_at(v.check, v.main_sec)
+        verdicts.append({"check": v.check, "answer": answer, "mode": "confirm", "cropped": cropped})
         if timeline.confirmed(v.check, answer):
             kept.append(v)
-    timings["verify"] = round(time.monotonic() - t0, 2)
     rejected = [v for v in violations if v not in kept]
-    violations = kept
+    recovered = []
+    for check, t_main in timeline.recall_triggers(steps, {v.check for v in violations}):
+        if time.monotonic() > deadline:
+            break
+        answer, cropped = verify_at(check, t_main)
+        verdicts.append({"check": check, "answer": answer, "mode": "recall", "cropped": cropped})
+        if answer != "unclear" and timeline.confirmed(check, answer):  # добавляем только по явному ответу
+            recovered.append(timeline._v(check, t_main, "подтверждено точной перепроверкой события", dur))
+    timings["verify"] = round(time.monotonic() - t0, 2)
+    violations = kept + recovered
 
     pool = np.unique(np.asarray(pts_pool or [0.0], dtype=float))
     out_cands = []
@@ -503,6 +542,7 @@ def _analyze_timeline(vid, src, info, backend, prof, deadline, timings, t_start,
         "violations": [{"check": v.check, "main_sec": v.main_sec, "reason": v.reason} for v in violations],
         "verifier": verdicts,
         "rejected_by_verifier": [{"check": v.check, "main_sec": v.main_sec} for v in rejected],
+        "recovered_by_verifier": [{"check": v.check, "main_sec": v.main_sec} for v in recovered],
         "video": asdict(info),
     }
     save_audit(vid, obs, diag, [(v.start_sec, v.end_sec) for v in violations], [])

@@ -279,3 +279,30 @@ def confirmed(check: str, answer: str) -> bool:
         return True
     inverted = VERIFY[check][1]
     return answer == ("no" if inverted else "yes")
+
+
+# Обрезка объекта для верификатора (классы COCO детектора).
+CROP_TARGET: dict[str, set[str]] = {
+    "LOCK": {"laptop"},
+    "LEAVE": {"dining table"}, "MIX": {"dining table"}, "BAG": {"dining table"},
+    "FOOD": {"dining table"}, "ITEMS": {"dining table"},
+}
+
+# Событие, при котором проверка «шаг не сделан» перепроверяется, даже если чек-лист промолчал.
+_RECALL = {
+    "LOCK": "cashier_leaves", "LEAVE": "cashier_leaves", "SAFE": "safe_open",
+    "DOOR": "cashier_enters", "DOC": "cash_given_by_client",
+}
+
+
+def recall_triggers(steps: list[tuple[float, str]], fired: set[str]) -> list[tuple[str, float]]:
+    """Проверки, которые чек-лист не поднял, но чьё ключевое событие есть на таймлайне: (check, время)."""
+    tl, out = _TL(steps), []
+    for check, event in _RECALL.items():
+        if check in fired or not tl.by[event]:
+            continue
+        t = tl.by[event][0]
+        if event == "cashier_leaves":
+            t = tl.last("cashier_stands_up", t - 15.0, t) or t
+        out.append((check, t))
+    return out

@@ -90,3 +90,31 @@ def test_observer_drops_violation_the_verifier_rejects(synthetic_video):
     obs, diag = analyze_video(synthetic_video, StubBackend(respond), video_id="syn", profile="fast")
     assert obs["analysis_status"] == "complete" and obs["candidates"] == []
     assert diag["rejected_by_verifier"] and all(v["answer"] == "no" for v in diag["verifier"])
+
+
+def test_recall_pass_adds_violation_when_timeline_invented_the_good_step(synthetic_video):
+    from forte_vision import analyze_video
+    from forte_vision.vlm import StubBackend
+
+    def respond(times, question):
+        if "Return ONLY a JSON list" in question:
+            # timeline claims the screen was locked before leaving -> checklist stays silent on LOCK
+            if times[0] < 5:
+                return json.dumps([{"event": "screen_locked", "t": times[0]},
+                                   {"event": "cashier_stands_up", "t": times[1]},
+                                   {"event": "cashier_leaves", "t": times[2]}])
+            return "[]"
+        return "yes" if "laptop screen" in question else "no"
+
+    obs, diag = analyze_video(synthetic_video, StubBackend(respond), video_id="syn", profile="fast")
+    assert [c for c in obs["candidates"] if c["predicates"]["left_with_computer_unlocked"] == "observed"]
+    assert any(v["check"] == "LOCK" for v in diag["recovered_by_verifier"])
+    assert any(v["mode"] == "recall" and v["check"] == "LOCK" and v["answer"] == "yes" for v in diag["verifier"])
+
+
+def test_recall_triggers_only_for_silent_checks_with_their_event():
+    from forte_vision.timeline import recall_triggers
+
+    steps = [(3, "cashier_stands_up"), (5, "cashier_leaves"), (9, "safe_open")]
+    assert dict(recall_triggers(steps, set())) == {"LOCK": 3, "LEAVE": 3, "SAFE": 9}
+    assert "LOCK" not in dict(recall_triggers(steps, {"LOCK"}))
