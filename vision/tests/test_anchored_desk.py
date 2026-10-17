@@ -112,3 +112,24 @@ def test_valuable_left_on_desk_after_cashier_left():
         if k.startswith(("OBJ0@", "OBJ0x@")):
             ans[k] = CropAnswer(k, "other")
     assert decide.judge(probes, ans) == []
+
+
+def test_cash_left_from_previous_client_found_by_object():
+    """X-38: прежний клиент ушёл в 24, пачка лежит с 27 до конца, следующий пришёл в 34.8 -> MIX по предмету."""
+    from forte_vision.anchored.types import DeskBlob, Event, Track
+    cashier = Track(tid=1, t=[0.0, 59.0], boxes=[(0.35, 0.42, 0.58, 0.61)] * 2, conf=[0.9, 0.9])
+    ev = [Event("client_change", 34.8, t_end=37.0, meta={"prev_exit": 24.0, "t_seen": 34.0})]
+    people = People(cashier=cashier, cashier_present=[(0.0, 59.0)], visits=[], visitors=[], desk_dir=-1, events=ev)
+    z = Zones(boxes={"desk": DESK})
+    pack = DeskBlob(box=(0.30, 0.46, 0.33, 0.48), t_on=27.0, t_off=58.5, area=4e-4)
+    probes = decide.plan(people, z, 59.0, blobs=[pack])
+    keys = [it.key for it in decide.all_items(probes)]
+    assert any(k.startswith("OBJ0m0@") for k in keys)
+    ans = {k: CropAnswer(k, "none") for k in keys}  # широкий вопрос по столу пачку не видит
+    for k in keys:
+        if k.startswith(("OBJ0@", "OBJ0m0@")):
+            ans[k] = CropAnswer(k, "cash", note="bundle of banknotes")
+    assert [(f.check, f.t_main) for f in decide.judge(probes, ans)] == [("MIX", 34.8)]
+    # убрала до прихода следующего: пятно исчезло раньше — проверки по предмету нет
+    early = DeskBlob(box=(0.30, 0.46, 0.33, 0.48), t_on=27.0, t_off=31.0, area=4e-4)
+    assert not any(it.key.startswith("OBJ0m") for it in decide.all_items(decide.plan(people, z, 59.0, blobs=[early])))

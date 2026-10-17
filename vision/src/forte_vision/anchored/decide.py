@@ -208,7 +208,7 @@ def plan(people: People, zones: Zones, dur: float, *, known_predicates: set[str]
     # 3) Смена клиентов: деньги предыдущего клиента ещё на столе, когда подходит следующий.
     #    Смотрим в конце промежутка между клиентами, до того как новый что-то отдал: после его прихода на столе
     #    уже его собственные деньги (X-5 — ложная тревога). Таймкод — приход следующего (X-38: эталон 33, пришёл 34.8).
-    for e in [e for e in ev if e.kind == "client_change"]:
+    for k, e in enumerate([e for e in ev if e.kind == "client_change"]):
         hi = min(float(e.meta.get("t_seen", e.t)), e.t) - 0.3
         lo = float(e.meta.get("prev_exit", hi - 3.0)) + 0.5
         ts = [max(lo, hi - 2.0), hi] if hi - lo >= 1.0 else [max(0.0, e.t - 1.0), e.t]
@@ -216,6 +216,15 @@ def plan(people: People, zones: Zones, dur: float, *, known_predicates: set[str]
             probes.append(Probe("MIX", e.t, _items("MIX", "desk", z.get("desk"), ts, "desk_what", dur),
                                 t_start=ts[0], t_end=_clip(e.t_end if e.t_end is not None else e.t, dur),
                                 reason="смена клиентов", want=("cash",)))
+            # тот же вопрос по найденному предмету: пачка лежит до прихода следующего и после — плотная вырезка
+            # (X-38: широкая вырезка всего стола пачку 15 px не увидела, 0 «да» из 2; детектор предметов — увидел)
+            for i, (b, its) in enumerate(blob_items(blobs or [], dur)):
+                if not its or b.t_on > hi - 0.5 or b.t_off < e.t + 1.0:
+                    continue
+                at = _items(f"OBJ{i}m{k}", "desk", its[0].box, [max(b.t_on + 1.0, hi)], "desk_obj", dur)
+                probes.append(Probe("MIX", e.t, its + at, need_yes=2, want=("cash",), t_start=max(b.t_on, ts[0]),
+                                    t_end=_clip(e.t_end if e.t_end is not None else e.t, dur),
+                                    reason=f"деньги на столе с {b.t_on:.1f} с, пришёл следующий клиент"))
 
     # 3б) Второй посетитель «через стол», пока первого ещё обслуживают (X-18; в чистом X-19 второй ждёт за
     #     стеклом, пока первый не выйдет). Решает детектор людей, без модели: на 40 роликах событие есть только
