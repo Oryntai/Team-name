@@ -144,7 +144,7 @@ def test_every_asked_predicate_is_used_by_default_catalogs_and_vice_versa():
 
     rules_dir = Path(__file__).resolve().parents[2] / "rules"
     used, visible = set(), set()
-    for name in ("cash_receipt.json", "cash_workplace.json"):
+    for name in ("cash_checks.json",):
         for rule in json.loads((rules_dir / name).read_text(encoding="utf-8")):
             used.update(rule["applicability"], rule["required"], rule["exceptions"])
             visible.update(rule["visibility_required"])

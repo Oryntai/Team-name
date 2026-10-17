@@ -33,10 +33,7 @@ class BackendRules:
             configured = os.environ.get("FORTE_RULE_CATALOGS")
             if configured is None:
                 rules_dir = Path(__file__).resolve().parents[2] / "rules"
-                catalog_paths = [
-                    rules_dir / "cash_receipt.json",
-                    rules_dir / "cash_workplace.json",
-                ]
+                catalog_paths = [rules_dir / "cash_checks.json"]
             else:
                 catalog_paths = strict_json_loads(configured)
                 if (

@@ -12,7 +12,7 @@ import math
 import re
 
 # Что именно должно быть видно, чтобы ответить "yes". Формулировки нейтральные: только наблюдаемое.
-PREDICATES: dict[str, str] = {
+LEGACY_PREDICATES: dict[str, str] = {
     "bank_cashier_role_established": "A person is working at the cashier workstation (seated or standing behind the cash desk, operating the desk/counter/laptop).",
     "cash_receipt_operation_established": "A client hands cash to the cashier (banknotes move from the client side to the cashier).",
     "cash_counting_observed": "The cashier counts banknotes, by hand or with a banknote counting machine.",
@@ -45,12 +45,30 @@ MIN_PERSONS: dict[str, int] = {
     "outsider_in_cash_room": 3,
 }
 
-VISIBILITY: dict[str, str] = {
+LEGACY_VISIBILITY: dict[str, str] = {
     "counting_interval_fully_visible": "The whole counting action is visible in these frames (hands and banknotes are not hidden).",
     "all_possible_client_positions_visible": "Every place where a client could stand or sit at this desk is inside the frame.",
     "workstation_and_exit_visible": "Both the cashier workstation and the way out of the cash area are visible.",
     "service_sequence_around_departure_visible": "The frames show what happens with the client right before and after the cashier leaves.",
 }
+
+# Предикаты проверок чек-листа (timeline.CHECKS): один предикат = одно правило rules/cash_checks.json.
+PREDICATES: dict[str, str] = {
+    "cash_accepted_without_id_document": "Cash or a cash bag is accepted although no ID document was shown.",
+    "client_cash_mixed_or_left_for_next_client": "A previous client's cash is left out for the next client or mixed with it.",
+    "left_with_computer_unlocked": "The cashier leaves while the computer screen is not locked.",
+    "left_valuables_on_desk": "The cashier leaves while cash or documents stay on the desk.",
+    "safe_left_open": "The safe is left open.",
+    "cash_room_door_left_open": "The cash room door is left open.",
+    "counted_after_client_left": "Cash is counted after the client has left.",
+    "personal_items_on_desk": "Personal items are placed on the cash desk.",
+    "food_or_drink_at_desk": "Food or drinks at the cash desk.",
+    "banknotes_not_checked_on_detector": "Banknotes are counted by hand without a detector or counting machine.",
+    "bag_cash_to_safe_without_registration": "Cash from a collection bag goes into the safe without counting or computer entry.",
+    "collection_bag_left_uncounted": "A collection bag is left on the desk uncounted.",
+    "served_out_of_queue": "A client is served out of queue order.",
+}
+VISIBILITY: dict[str, str] = {}
 
 # Скрининг: открытый список категорий + "other" для типов, которых нет в обучении.
 SCREEN_CATEGORIES: dict[str, str] = {

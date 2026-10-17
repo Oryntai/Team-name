@@ -39,9 +39,16 @@ def _respond(times, question):
     )
 
 
+def _timeline_respond(times, question):
+    # Personal items appear on the desk at the synthetic event (8–10 s).
+    if any(8.0 <= t <= 10.0 for t in times):
+        return json.dumps([{"event": "items_on_desk", "t": 9.0}])
+    return "[]"
+
+
 def test_adapter_returns_backend_batch(synthetic_video):
     a = backend_adapter.VisionAnalyzer.__new__(backend_adapter.VisionAnalyzer)
-    a.backend, a.detector, a.reserve = StubBackend(_respond), None, 0.0
+    a.backend, a.detector, a.reserve = StubBackend(_timeline_respond), None, 0.0
     video = actual_video(synthetic_video)
     ctx = contracts.AnalysisContext(
         job_id="j1", video_path=synthetic_video, deadline_at=time.time() + 120
@@ -58,8 +65,8 @@ def test_adapter_returns_backend_batch(synthetic_video):
         assert set(ev.sources) <= {"vlm", "motion", "detector"}
         assert ev.visibility == {}
     hit = [ev for ev in batch.events if ev.t_start <= 9.0 <= ev.t_end]
-    assert hit and hit[0].observations["cash_counting_observed"] == "observed"
-    assert hit[0].observations["counting_interval_fully_visible"] == "not_observed"
+    assert hit and hit[0].observations["personal_items_on_desk"] == "observed"
+    assert hit[0].observations["safe_left_open"] == "not_observed"
     assert all(
         isinstance(v, (str, int, float, bool)) or v is None
         for v in batch.diagnostics.values()

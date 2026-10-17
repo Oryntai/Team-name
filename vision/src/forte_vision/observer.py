@@ -13,12 +13,13 @@
 
 from __future__ import annotations
 
+import math
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 
 import numpy as np
 
-from . import motion, predicates, scene
+from . import motion, predicates, scene, timeline
 from .contract import validate_observation
 from .video import EVIDENCE_SOURCE, PyAVSource, frame_id
 from .vlm import VLMBackend
@@ -44,16 +45,26 @@ class Profile:
     role_marks: bool = True
     screen_size: tuple[int, int] = (224, 416)
     recheck_size: tuple[int, int] | None = None  # None — исходное разрешение
+    # Таймлайн шагов + чек-лист (timeline.py) вместо скрининга и перепроверки предикатов.
+    timeline: bool = False
+    timeline_frames: int = 8          # кадров на окно
+    timeline_min_window_sec: float = 8.0
+    timeline_max_windows: int = 8     # длинные ролики — шире окна, реже кадры, тот же бюджет запросов
+    timeline_size: tuple[int, int] | None = None
 
 
 # Стартовые параметры, не оптимум: подбираются замерами и качеством на dev.
+_LEGACY_FAST = Profile("legacy_fast", motion_fps=5.0, zone_sec_per_peak=8.0, global_sec_per_peak=20.0, det_fps=2.0,
+                       screen_fps=0.5, screen_window_sec=20.0, screen_overlap_sec=2.0, recheck_frames=4,
+                       max_rechecks=8, spread_seg_sec=15.0)
+_LEGACY_FULL = Profile("legacy_full", motion_fps=5.0, zone_sec_per_peak=4.0, global_sec_per_peak=10.0, det_fps=3.0,
+                       screen_fps=1.0, screen_window_sec=12.0, screen_overlap_sec=2.0, recheck_frames=6,
+                       max_rechecks=20, spread_seg_sec=8.0)
 PROFILES: dict[str, Profile] = {
-    "fast": Profile("fast", motion_fps=5.0, zone_sec_per_peak=8.0, global_sec_per_peak=20.0, det_fps=2.0,
-                    screen_fps=0.5, screen_window_sec=20.0, screen_overlap_sec=2.0, recheck_frames=4,
-                    max_rechecks=8, spread_seg_sec=15.0),
-    "full": Profile("full", motion_fps=5.0, zone_sec_per_peak=4.0, global_sec_per_peak=10.0, det_fps=3.0,
-                    screen_fps=1.0, screen_window_sec=12.0, screen_overlap_sec=2.0, recheck_frames=6,
-                    max_rechecks=20, spread_seg_sec=8.0),
+    "fast": replace(_LEGACY_FAST, name="fast", timeline=True, timeline_max_windows=8),
+    "full": replace(_LEGACY_FULL, name="full", timeline=True, timeline_max_windows=20),
+    "legacy_fast": _LEGACY_FAST,
+    "legacy_full": _LEGACY_FULL,
 }
 
 
@@ -185,6 +196,8 @@ def analyze_video(
     info = src.probe()
     dur = info.duration_sec
     mark("probe", t0)
+    if prof.timeline:
+        return _analyze_timeline(vid, src, info, backend, prof, deadline, timings, t_start, detector)
     cands: list[_Cand] = []
     pts_pool: list[float] = []
 
@@ -256,8 +269,8 @@ def analyze_video(
     item_seen: dict[int, list[str]] = {}
     vetoed: dict[int, list[str]] = {}
     persons_seen: dict[int, int] = {}
-    names_p, names_v = list(predicates.PREDICATES), list(predicates.VISIBILITY)
-    table = {**predicates.PREDICATES, **predicates.VISIBILITY}
+    names_p, names_v = list(predicates.LEGACY_PREDICATES), list(predicates.LEGACY_VISIBILITY)
+    table = {**predicates.LEGACY_PREDICATES, **predicates.LEGACY_VISIBILITY}
     q_pred = predicates.predicate_question(names_p + names_v, table)
     # Бюджет: перепроверка — самый дорогой шаг (~десятки секунд на кандидата). Когда следующая
     # перепроверка уже не успевает, оставшиеся (наименее приоритетные) кандидаты снимаются с отбора
@@ -376,6 +389,97 @@ def analyze_video(
         "video": asdict(info),
     }
     save_audit(vid, obs, diag, raw_intervals, pooled_intervals)
+    return obs, diag
+
+
+def _timeline_windows(dur: float, prof: Profile) -> list[tuple[float, float]]:
+    win = max(prof.timeline_min_window_sec, dur / max(1, prof.timeline_max_windows))
+    n = max(1, math.ceil(dur / win - 1e-9))
+    return [(i * dur / n, (i + 1) * dur / n) for i in range(n)]
+
+
+def _analyze_timeline(vid, src, info, backend, prof, deadline, timings, t_start, detector):
+    """Таймлайн шагов по всему ролику -> чек-лист -> Observation (кандидат на каждое нарушение)."""
+    dur = info.duration_sec
+    t0 = time.monotonic()
+    windows = _timeline_windows(dur, prof)
+    question = timeline.timeline_question()
+    steps: list[tuple[float, str]] = []
+    pts_pool: list[float] = []
+    covered = invalid = dropped = 0
+    for ws, we in windows:
+        if time.monotonic() > deadline:
+            break
+        times = [ws + (k + 0.5) * (we - ws) / prof.timeline_frames for k in range(prof.timeline_frames)]
+        frames = src.grab_at([round(t, 3) for t in times], size=prof.timeline_size)
+        frames = [(t, im) for t, im in frames if t <= dur + 1e-6]
+        if not frames:
+            invalid += 1
+            continue
+        pts_pool.extend(t for t, _ in frames)
+        ans = backend.ask(frames, question, max_tokens=400)
+        parsed, ok, n_dropped = timeline.parse_timeline(ans.text, ws, we)
+        dropped += n_dropped
+        if not ok:
+            invalid += 1
+            continue
+        steps.extend(parsed)
+        covered += 1
+    mark_t = round(time.monotonic() - t0, 2)
+    timings["timeline"] = mark_t
+    coverage_complete = covered == len(windows)
+    violations = timeline.run_checklist(steps, dur) if coverage_complete else []
+
+    pool = np.unique(np.asarray(pts_pool or [0.0], dtype=float))
+    out_cands = []
+    for k, v in enumerate(sorted(violations, key=lambda v: v.main_sec)):
+        ev = []
+        for target in (v.main_sec, *v.evidence_sec):
+            p = _nearest(pool, target, v.start_sec, v.end_sec)
+            if p is not None and p not in ev:
+                ev.append(p)
+        start, end = v.start_sec, v.end_sec
+        if not ev:
+            p = float(pool[np.argmin(np.abs(pool - v.main_sec))])
+            start, end, ev = min(start, p), max(end, p), [p]
+        out_cands.append({
+            "candidate_id": f"c{k:03d}",
+            "start_sec": round(start, 3),
+            "end_sec": round(end, 3),
+            "main_sec": round(min(max(v.main_sec, start), end), 3),
+            "source": "vlm",
+            "evidence": [{"frame_id": frame_id(p), "pts_sec": round(p, 3), "source": EVIDENCE_SOURCE}
+                         for p in sorted(ev)[:3]],
+            "predicates": {name: ("observed" if code == v.check else "not_observed")
+                           for code, name in timeline.CHECKS.items()},
+            "visibility": {},
+        })
+    obs = {
+        "video_id": vid,
+        "duration_sec": round(dur, 3),
+        "analysis_status": "complete" if coverage_complete else "partial",
+        "coverage_complete": coverage_complete,
+        "candidates": out_cands,
+    }
+    validate_observation(obs)
+    timings["total"] = round(time.monotonic() - t_start, 2)
+    diag = {
+        "model_id": backend.model_id,
+        "revision": backend.revision,
+        "detector": None if detector is None else f"rfdetr-{detector.size}@{detector.device}",
+        "profile": asdict(prof),
+        "stage_timings": timings,
+        "vlm": asdict(backend.stats),
+        "vlm_routing": dict(getattr(backend, "routing", {}) or {}),
+        "timeline_windows": len(windows),
+        "timeline_covered_windows": covered,
+        "timeline_invalid_windows": invalid,
+        "timeline_dropped_items": dropped,
+        "timeline_steps": [[round(t, 2), e] for t, e in sorted(steps)],
+        "violations": [{"check": v.check, "main_sec": v.main_sec, "reason": v.reason} for v in violations],
+        "video": asdict(info),
+    }
+    save_audit(vid, obs, diag, [(v.start_sec, v.end_sec) for v in violations], [])
     return obs, diag
 
 

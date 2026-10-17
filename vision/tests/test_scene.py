@@ -76,7 +76,7 @@ def test_observer_uses_detector_and_role_hint(synthetic_video):
         questions.append(question)
         return "[]" if "Categories:" in question else json.dumps({"cashier_left_workstation": "yes"})
 
-    obs, diag = analyze_video(synthetic_video, StubBackend(respond), video_id="syn", profile="fast",
+    obs, diag = analyze_video(synthetic_video, StubBackend(respond), video_id="syn", profile="legacy_fast",
                               detector=FakeDetector())
     validate_observation(obs)
     assert diag["scene"]["desk_found"] and diag["scene"]["cashier_slot_found"]

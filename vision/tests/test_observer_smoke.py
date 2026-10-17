@@ -4,7 +4,7 @@ import json
 
 from conftest import EVENT
 from forte_vision import analyze_video, validate_observation
-from forte_vision.predicates import PREDICATES, VISIBILITY
+from forte_vision.predicates import LEGACY_PREDICATES as PREDICATES, LEGACY_VISIBILITY as VISIBILITY
 from forte_vision.vlm import StubBackend
 
 
@@ -23,7 +23,7 @@ def _respond(times, question):
 
 def test_full_pipeline_with_stub(synthetic_video):
     backend = StubBackend(_respond)
-    obs, diag = analyze_video(synthetic_video, backend, video_id="syn", profile="fast")
+    obs, diag = analyze_video(synthetic_video, backend, video_id="syn", profile="legacy_fast")
     validate_observation(obs)
     assert obs["analysis_status"] == "complete" and obs["coverage_complete"]
     hits = [c for c in obs["candidates"] if c["start_sec"] <= 9.0 <= c["end_sec"]]
@@ -46,7 +46,7 @@ def test_long_vlm_interval_is_split(synthetic_video):
         return "{}"
 
     obs, _ = analyze_video(
-        synthetic_video, StubBackend(respond), video_id="syn", profile="full"
+        synthetic_video, StubBackend(respond), video_id="syn", profile="legacy_full"
     )
     validate_observation(obs)
     lengths = [c["end_sec"] - c["start_sec"] for c in obs["candidates"]]
@@ -59,8 +59,7 @@ def test_long_vlm_interval_is_split(synthetic_video):
 
 def test_deadline_gives_honest_partial(synthetic_video):
     obs, diag = analyze_video(
-        synthetic_video, StubBackend(_respond), video_id="syn", deadline_sec=0.0
-    )
+        synthetic_video, StubBackend(_respond), video_id="syn", deadline_sec=0.0, profile="legacy_fast")
     validate_observation(obs)
     assert obs["coverage_complete"] is False
     assert obs["analysis_status"] == "partial"
@@ -103,8 +102,7 @@ def test_malformed_screen_cannot_be_complete_empty_negative(monkeypatch):
         "unused-synthetic",
         StubBackend(lambda times, question: "BROKEN RESPONSE"),
         video_id="synthetic",
-        source=StaticSyntheticSource(),
-    )
+        source=StaticSyntheticSource(), profile="legacy_fast")
     assert obs["candidates"] == []
     assert obs["analysis_status"] == "partial" and obs["coverage_complete"] is False
     assert diag["invalid_screen_windows"] == 1 and diag["valid_screen_windows"] == 0
@@ -117,8 +115,7 @@ def test_valid_empty_screen_is_complete(monkeypatch):
         "unused-synthetic",
         StubBackend(lambda times, question: "[]"),
         video_id="synthetic",
-        source=StaticSyntheticSource(),
-    )
+        source=StaticSyntheticSource(), profile="legacy_fast")
     assert obs["candidates"] == []
     assert obs["analysis_status"] == "complete" and obs["coverage_complete"] is True
     assert diag["invalid_screen_windows"] == 0 and diag["valid_screen_windows"] == 1
@@ -131,8 +128,7 @@ def test_empty_screen_window_is_incomplete_without_model_call(monkeypatch):
         "unused-synthetic",
         backend,
         video_id="synthetic",
-        source=StaticSyntheticSource(empty_screen=True),
-    )
+        source=StaticSyntheticSource(empty_screen=True), profile="legacy_fast")
     assert obs["analysis_status"] == "partial" and obs["coverage_complete"] is False
     assert diag["empty_screen_windows"] == 1 and backend.stats.calls == 0
 
@@ -163,14 +159,14 @@ def _drink_everywhere(times, question):
 
 def test_object_predicate_needs_detector_confirmation(synthetic_video):
     obs, diag = analyze_video(synthetic_video, StubBackend(_drink_everywhere), video_id="syn",
-                              profile="fast", detector=_FakeDetector([]))
+                              profile="legacy_fast", detector=_FakeDetector([]))
     validate_observation(obs)
     assert obs["candidates"]
     assert all(c["predicates"]["food_or_drink_at_desk"] == "not_observed" for c in obs["candidates"])
     assert any("food_or_drink_at_desk" in d["detector_veto"] for d in diag["candidates"].values())
 
     obs, _ = analyze_video(synthetic_video, StubBackend(_drink_everywhere), video_id="syn",
-                           profile="fast", detector=_FakeDetector(["cup"]))
+                           profile="legacy_fast", detector=_FakeDetector(["cup"]))
     assert any(c["predicates"]["food_or_drink_at_desk"] == "observed" for c in obs["candidates"])
 
 
@@ -183,7 +179,7 @@ def test_recheck_budget_drops_low_priority_candidates_instead_of_partial(synthet
         time.sleep(0.4)
         return json.dumps({n: "no" for n in [*PREDICATES, *VISIBILITY]})
 
-    obs, diag = analyze_video(synthetic_video, StubBackend(slow), video_id="syn", profile="full",
+    obs, diag = analyze_video(synthetic_video, StubBackend(slow), video_id="syn", profile="legacy_full",
                               deadline_sec=1.5)
     validate_observation(obs)
     assert obs["coverage_complete"] is True
@@ -216,6 +212,6 @@ def _outsider_everywhere(times, question):
 def test_outsider_needs_a_third_person_on_frames(synthetic_video):
     for people, expected in ((2, "not_observed"), (3, "observed")):
         obs, _ = analyze_video(synthetic_video, StubBackend(_outsider_everywhere), video_id="syn",
-                               profile="fast", detector=_PeopleDetector(people))
+                               profile="legacy_fast", detector=_PeopleDetector(people))
         assert any(c["predicates"]["outsider_in_cash_room"] == expected for c in obs["candidates"])
         assert all(c["predicates"]["outsider_in_cash_room"] in ("not_observed", expected) for c in obs["candidates"])

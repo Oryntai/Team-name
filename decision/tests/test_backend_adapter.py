@@ -16,6 +16,13 @@ from backend.contracts import (
 from forte_decision.backend_adapter import BackendRules, create_rules
 
 
+@pytest.fixture(autouse=True)
+def _seed_receipt_catalog(monkeypatch):
+    # These tests pin the semantics of the seed cash-receipt catalog (applicability, visibility).
+    catalog = Path(__file__).resolve().parents[2] / "rules" / "cash_receipt.json"
+    monkeypatch.setenv("FORTE_RULE_CATALOGS", json.dumps([str(catalog)]))
+
+
 @pytest.fixture
 def context(tmp_path):
     return AnalysisContext(
