@@ -37,6 +37,10 @@ def _known_predicates() -> set[str]:
     return out
 
 
+# зоны (~11 с), стол (~5 с), одна пачка вопросов (~8 с) и запас: столько нужно после детектора
+SCAN_RESERVE_SEC = 30.0
+
+
 class AnchoredAnalyzer:
     def __init__(self, detector, asker, *, reserve_sec: float = 20.0, scan_fps: float = 5.0):
         self.detector, self.asker = detector, asker
@@ -74,8 +78,11 @@ class AnchoredAnalyzer:
         timings = {"share_sec": round(share_end() - t0, 1)}
 
         # 1) плотный проход детектора не дольше трети доли ролика
+        # детектору — треть доли, но не больше, чем остаётся после зон, стола и хотя бы одной пачки вопросов
+        # (~30 с): при залпе иначе он съедал долю целиком и вопросов уже не оставалось
+        share = share_end() - t0
         scan = dense_scan(path, fps=self.scan_fps, detector=self.detector,
-                          deadline=t0 + 0.35 * (share_end() - t0))
+                          deadline=t0 + min(0.35 * share, max(3.0, share - SCAN_RESERVE_SEC)))
         timings["t_scan"] = round(time.monotonic() - t0, 2)
 
         # 2) зоны: 2–4 вопроса модели на ролик
@@ -108,12 +115,15 @@ class AnchoredAnalyzer:
         answers: dict[str, CropAnswer] = {}
         asked = 0
         ctx = _context_text(people)
+        batch_sec = 8.0  # сколько идёт пачка вопросов; уточняется по факту
         for i, batch in enumerate(_chunks(event_items, 8) + _chunks(sweep_items, 8)):
             # первая пачка ограничена только жёстким сроком: без неё ролик остался бы без вердикта;
-            # дальше — доля ролика в очереди (запас на кадры-доказательства уже заложен в долю)
-            stop = deadline - 12.0 if i == 0 else min(deadline - 12.0, share_end() - 5.0)
+            # дальше пачку начинаем, только если она успеет закончиться в доле ролика (иначе перерасход
+            # копится, и последнему ролику залпа не остаётся времени даже на один вопрос)
+            stop = deadline - 12.0 if i == 0 else min(deadline - 12.0, share_end() - batch_sec)
             if time.monotonic() > stop:
                 break
+            t_batch = time.monotonic()
             try:
                 got = self.asker.ask(path, batch, ctx)
                 # сервер модели моргнул (туннель переподключается, перегрузка) — переспросить, пока есть время
@@ -125,6 +135,7 @@ class AnchoredAnalyzer:
                 for a in got:
                     answers[a.key] = a
                 asked += len(batch)
+                batch_sec = max(4.0, time.monotonic() - t_batch)
             except Exception as e:
                 timings["ask_error"] = repr(e)[:200]
                 break

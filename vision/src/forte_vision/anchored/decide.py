@@ -69,6 +69,8 @@ Q["desk_obj"] = ("Look at the object in the middle of this crop, lying on the de
                  "other = any other object; none = no object, just the desk surface, a shadow or equipment "
                  "(laptop, telephone, counting machine).")
 OBJ_CHOICES = ("cash", "documents", "cash_bag", "bag", "food", "drink", "phone", "other", "none")
+# FOOD — только еда: банка или стакан на столе — не нарушение (нормы нет; чистый X-25 с двумя банками на столе)
+FOOD_WANT = ("food",)
 SCREEN_CHOICES = ("document", "desktop", "lock", "off")
 
 
@@ -216,6 +218,9 @@ def plan(people: People, zones: Zones, dur: float, *, known_predicates: set[str]
     for e in [e for e in ev if e.kind == "cashier_sits" and e.meta.get("after") != "enter"]:
         if not allow("SAFE") or not _first(ev, "cashier_stands", after=e.t - 30.0, before=e.t):
             continue
+        again = _first(ev, "cashier_stands", after=e.t + 0.1)
+        if again is not None and again.t - e.t < 6.0:
+            continue  # села и сразу снова встала (часто — закрыть сейф): открытый сейф в этот миг ещё не нарушение
         ts2 = [t for t in (e.t + 1.0, e.t + 3.0) if t < dur - 0.1]
         if len(ts2) == 2:
             probes.append(Probe("SAFE", max(0.0, e.t - 0.5), _items("SAFEs", "safe", z.get("safe"), ts2, "safe_open", dur),
@@ -254,7 +259,8 @@ def plan(people: People, zones: Zones, dur: float, *, known_predicates: set[str]
             probes.append(Probe("QUE", t_main, [], t_start=e.t, t_end=_clip(e.t_end if e.t_end else t_main, dur),
                                 reason=f"второй посетитель у стола во время визита с {e.t:.1f} с", fixed=True))
 
-    # 4) Клиент ушёл, кассир осталась: пересчёт без клиента (только если до ухода не считали).
+    # 4) Клиент ушёл, кассир осталась и всё ещё считает: пересчёт без клиента. Считала ли она до ухода — не важно:
+    #    X-34 (нарушение) и чистый X-35 оба считают при клиенте, разница — продолжается ли счёт после его ухода.
     for e in [e for e in ev if e.kind == "client_leaves"]:
         if e.t > dur - 2.0 or not _present(people, e.t + 2.0):
             continue
@@ -264,7 +270,6 @@ def plan(people: People, zones: Zones, dur: float, *, known_predicates: set[str]
         if allow("NOCLIENT"):
             probes.append(Probe("NOCLIENT", e.t + 1.5,
                                 _items("NOCL", "counter", z.get("counter"), [e.t + 1.5, e.t + 4.0], "counting", dur),
-                                veto=_items("NOCLpre", "counter", z.get("counter"), [e.t - 2.0], "counting", dur),
                                 t_start=e.t, t_end=_clip(e.t + 4.0, dur), reason="пересчёт после ухода клиента"))
 
     # 5) Состояния без события людей: сейф открыт при кассире не у сейфа, вещи и еда на столе.
@@ -277,11 +282,11 @@ def plan(people: People, zones: Zones, dur: float, *, known_predicates: set[str]
     sweep = [("SAFE", "safe", "safe_open", "SAFEp", ())]
     if blobs is None:
         sweep += [("ITEMS", "desk", "desk_what", "DESKp", ("bag",)),
-                  ("FOOD", "desk", "desk_what", "DESKp", ("food", "drink"))]
+                  ("FOOD", "desk", "desk_what", "DESKp", FOOD_WANT)]
     else:
         # 6) Новый предмет на столе: что это — по плотной вырезке, на двух кадрах (OBJi@t общие для проверок)
         for b, its in blob_items(blobs, dur):
-            for check, want in (("ITEMS", ("bag",)), ("FOOD", ("food", "drink"))):
+            for check, want in (("ITEMS", ("bag",)), ("FOOD", FOOD_WANT)):
                 if allow(check) and its:
                     probes.append(Probe(check, b.t_on, its, need_yes=2, t_start=b.t_on, t_end=min(b.t_off, dur),
                                         reason=f"новый предмет на столе {b.t_on:.1f}–{b.t_off:.1f} с", want=want))

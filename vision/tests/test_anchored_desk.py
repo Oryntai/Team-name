@@ -69,10 +69,12 @@ def test_blob_probe_needs_both_crops_and_replaces_blind_sweep():
     assert len(obj) == 2 and all(it.open and "other" in it.choices for it in obj)
     assert obj[0].box[2] - obj[0].box[0] >= 0.12  # вырезка с контекстом, а не 15 px
     ans = {k: CropAnswer(k, "no") for k in keys}
-    ans[obj[0].key] = CropAnswer(obj[0].key, "drink", note="coffee cup")
+    ans[obj[0].key] = CropAnswer(obj[0].key, "food", note="sandwich")
     assert decide.judge(probes, ans) == []
-    ans[obj[1].key] = CropAnswer(obj[1].key, "drink")
+    ans[obj[1].key] = CropAnswer(obj[1].key, "food")
     assert [(f.check, f.t_main) for f in decide.judge(probes, ans)] == [("FOOD", 12.0)]
+    drinks = {**ans, obj[0].key: CropAnswer(obj[0].key, "drink"), obj[1].key: CropAnswer(obj[1].key, "drink")}
+    assert decide.judge(probes, drinks) == []
     assert decide.plan(people, z, 30.0, blobs=[]) and not any(
         it.key.startswith(("OBJ", "DESKp")) for it in decide.all_items(decide.plan(people, z, 30.0, blobs=[])))
 

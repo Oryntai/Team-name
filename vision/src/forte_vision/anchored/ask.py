@@ -184,9 +184,17 @@ _CHOICE_SYN = {
 }
 
 
+# Оборудование рабочего места: модель зовёт его «cash counting machine», «cash register» и сама ставит группу
+# cash, а это не деньги на столе (ложные «ушла, оставив деньги» на чистых X-27, X-29)
+_EQUIPMENT = {"machine", "counter", "register", "detector", "device", "laptop", "computer", "monitor", "keyboard",
+              "mouse", "printer", "scanner", "terminal", "tablet", "calculator", "lamp", "chair", "armrest", "cable"}
+
+
 def norm_choices(v, choices: Sequence[str]) -> str:
     """Ответ на вопрос «что из этого видно» -> "cash+food" | "none" | "unclear" (подмножество choices)."""
     if isinstance(v, dict):
+        if "other" in choices and _EQUIPMENT & set(re.findall(r"[a-z]+", str(v.get("what") or "").lower())):
+            return "other"
         g = next((v[k] for k in ("group", "class", "category", "answer", "value", "items", "objects") if k in v), None)
         if g is None or norm_choices(g, choices) == "unclear":  # группа не распознана — по словам «what»
             g = v.get("what", g)
