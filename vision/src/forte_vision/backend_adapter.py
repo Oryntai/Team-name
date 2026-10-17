@@ -5,7 +5,8 @@ analyze(context, video) -> backend.contracts.ObservationBatch. Длительн�
 Все изображения берутся из общего VideoIO: iter_frames для выборки и frames_at для перепроверки.
 PIL декодирует оригинальный JPEG и уменьшает копию для inference; время изображения не переименовывается.
 
-Переменные окружения: FORTE_VLM_BACKEND (mlx | transformers), FORTE_VLM_MODEL, FORTE_DETECTOR
+Переменные окружения: FORTE_VLM_BACKEND (mlx | transformers | openai; для openai — FORTE_VLM_URL
+локального сервера и FORTE_VLM_KEY_FILE), FORTE_VLM_MODEL, FORTE_DETECTOR
 (none | nano | small | medium), FORTE_VISION_PROFILE (fast | full; иначе context.profile, если он
 совпадает с именем профиля), FORTE_VISION_RESERVE_SEC — запас до дедлайна на правила и JPEG.
 """

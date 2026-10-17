@@ -41,7 +41,7 @@ def main() -> None:
     ap.add_argument("--videos", required=True)
     ap.add_argument("--profile", choices=sorted(PROFILES), default="fast")
     ap.add_argument("--detector", choices=["none", "nano", "small", "medium"], default="nano")
-    ap.add_argument("--vlm", choices=["none", "mlx", "transformers"], default="none")
+    ap.add_argument("--vlm", choices=["none", "mlx", "transformers", "openai"], default="none")
     ap.add_argument("--model")
     ap.add_argument("--tol", type=float, default=1.0, help="допуск к размеченной секунде, с")
     ap.add_argument("--only", nargs="*", help="ограничить списком файлов")
