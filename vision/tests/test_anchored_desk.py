@@ -75,3 +75,14 @@ def test_blob_probe_needs_both_crops_and_replaces_blind_sweep():
     assert [(f.check, f.t_main) for f in decide.judge(probes, ans)] == [("FOOD", 12.0)]
     assert decide.plan(people, z, 30.0, blobs=[]) and not any(
         it.key.startswith(("OBJ", "DESKp")) for it in decide.all_items(decide.plan(people, z, 30.0, blobs=[])))
+
+
+def test_fragments_of_one_object_are_merged():
+    from forte_vision.anchored.desk import _merge
+    from forte_vision.anchored.types import DeskBlob
+    parts = [DeskBlob((0.30, 0.46, 0.33, 0.48), 13.8, 16.8, 2e-4), DeskBlob((0.31, 0.465, 0.335, 0.485), 13.8, 16.8, 3e-4),
+             DeskBlob((0.32, 0.47, 0.34, 0.49), 14.0, 17.0, 1e-4), DeskBlob((0.60, 0.46, 0.63, 0.48), 14.0, 17.0, 2e-4),
+             DeskBlob((0.30, 0.46, 0.33, 0.48), 40.0, 45.0, 2e-4)]
+    m = _merge(parts)
+    assert len(m) == 3  # один предмет из трёх кусков + другой предмет рядом по времени + тот же стол позже
+    assert m[0].t_on == 13.8 and m[0].t_off == 17.0 and m[0].box == (0.30, 0.46, 0.34, 0.49)

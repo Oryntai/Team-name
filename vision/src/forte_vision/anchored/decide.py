@@ -27,6 +27,7 @@ PREDICATE = {
     "ITEMS": "personal_items_on_desk",
     "FOOD": "food_or_drink_at_desk",
     "KEYS": "keys_left_in_safe_lock",  # выдаётся, только если правило есть в загруженном каталоге
+    "QUE": "served_out_of_queue",
 }
 
 Q = {
@@ -203,6 +204,15 @@ def plan(people: People, zones: Zones, dur: float, *, known_predicates: set[str]
                                 t_start=ts[0], t_end=_clip(e.t_end if e.t_end is not None else e.t, dur),
                                 reason="смена клиентов", want=("cash",)))
 
+    # 3б) Второй посетитель «через стол», пока первого ещё обслуживают (X-18; в чистом X-19 второй ждёт за
+    #     стеклом, пока первый не выйдет). Решает детектор людей, без модели: на 40 роликах событие есть только
+    #     в роликах с нарушением. Таймкод — второй дошёл до стола и остановился (X-18: появился 15.4, эталон 20).
+    for e in [e for e in ev if e.kind == "third_person" and e.meta.get("side") == "across"]:
+        if allow("QUE"):
+            t_main = _settle_time(people, e)
+            probes.append(Probe("QUE", t_main, [], t_start=e.t, t_end=_clip(e.t_end if e.t_end else t_main, dur),
+                                reason=f"второй посетитель у стола во время визита с {e.t:.1f} с", fixed=True))
+
     # 4) Клиент ушёл, кассир осталась: пересчёт без клиента (только если до ухода не считали).
     for e in [e for e in ev if e.kind == "client_leaves"]:
         if e.t > dur - 2.0 or not _present(people, e.t + 2.0):
@@ -242,6 +252,23 @@ def plan(people: People, zones: Zones, dur: float, *, known_predicates: set[str]
             probes.append(Probe(check, ts[0], _items(tag, zone, z.get(zone), ts, q, dur),
                                 need_yes=2, t_start=ts[0], t_end=ts[-1], reason="обход по ролику", want=want))
     return probes
+
+
+def _settle_time(people: People, e: Event, still: float = 0.02, hold: float = 1.0) -> float:
+    """Когда трек посетителя из события перестал идти: центр рамки за hold секунд сдвинулся меньше still."""
+    tr = next((v for v in people.visitors if v.tid == e.meta.get("tid")), None)
+    if tr is None or len(tr.t) < 3:
+        return e.t
+    c = [((b[0] + b[2]) / 2, (b[1] + b[3]) / 2) for b in tr.boxes]
+    for i, t in enumerate(tr.t):
+        if t < tr.start + 1.0:
+            continue
+        j = next((k for k in range(i, len(tr.t)) if tr.t[k] >= t + hold), None)
+        if j is None:
+            break
+        if max(abs(c[k][0] - c[i][0]) + abs(c[k][1] - c[i][1]) for k in range(i, j + 1)) < still:
+            return float(t)
+    return e.t
 
 
 def _present(people: People, t: float) -> bool:

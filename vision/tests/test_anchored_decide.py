@@ -125,3 +125,19 @@ def test_lock_screen_after_leaving_is_not_a_violation():
     for it in lock:
         ans[it.key] = CropAnswer(it.key, "document")
     assert [f.check for f in decide.judge(probes, ans)] == ["LOCK"]
+
+
+def test_second_visitor_across_during_visit_is_queue_violation_timed_when_he_stops():
+    """X-18: второй подошёл к столу, пока первый сидит; таймкод — когда дошёл и встал, а не когда появился."""
+    walk = [(0.05 + 0.03 * k, 0.2, 0.15 + 0.03 * k, 0.45) for k in range(10)] + [(0.35, 0.2, 0.45, 0.45)] * 15
+    late = Track(tid=7, t=[15.0 + 0.4 * k for k in range(25)], boxes=walk, conf=[0.9] * 25)
+    ev = [Event("third_person", 15.0, 24.6, {"side": "across", "tid": 7})]
+    people = _people(ev, present=((0.0, 30.0),))
+    people.visitors = [late]
+    probes = decide.plan(people, Z, 30.0)
+    found = decide.judge(probes, _answer(probes, set()))
+    assert [f.check for f in found] == ["QUE"] and 18.5 <= found[0].t_main <= 19.5
+    ev_level = [Event("third_person", 15.0, 24.6, {"side": "level", "tid": 7})]  # рядом с кассиром — не очередь
+    p2 = _people(ev_level, present=((0.0, 30.0),))
+    p2.visitors = [late]
+    assert [f.check for f in decide.judge(decide.plan(p2, Z, 30.0), {})] == []

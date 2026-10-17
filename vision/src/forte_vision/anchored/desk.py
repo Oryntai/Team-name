@@ -160,8 +160,43 @@ def desk_blobs(scan: DenseScan, zones: Zones, *, win: float = 3.0, step: float =
         bx = ((x1 + sx.start) / gw, (y1 + sy.start) / gh, (x1 + sx.stop) / gw, (y1 + sy.stop) / gh)
         out.append(DeskBlob(box=tuple(round(v, 4) for v in bx), t_on=round(t_on, 2), t_off=round(t_off, 2),
                             area=round(max(c[2] for c in g) / (gh * gw), 5), meta={"steps": len(g)}))
+    out = _merge(out)
     out.sort(key=lambda b: -(b.area * min(b.t_off - b.t_on, 20.0)))
     return sorted(out[:max_blobs], key=lambda b: b.t_on)
+
+
+def _box_iou(a: Box, b: Box) -> float:
+    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    inter = ix * iy
+    ua = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / ua if ua > 0 else 0.0
+
+
+def _merge(blobs: list[DeskBlob]) -> list[DeskBlob]:
+    """Один предмет, распавшийся на несколько пятен (X-2: подлокотник 4 раза): пересекаются по месту
+    (IoU ≥ 0.2 или центр одного внутри другого) и по времени — склеиваем: общая рамка, раннее появление."""
+    def same(a: DeskBlob, b: DeskBlob) -> bool:
+        if a.t_off < b.t_on - 1.0 or b.t_off < a.t_on - 1.0:
+            return False
+        if _box_iou(a.box, b.box) >= 0.2:
+            return True
+        for x, y in ((a, b), (b, a)):
+            cx, cy = (x.box[0] + x.box[2]) / 2, (x.box[1] + x.box[3]) / 2
+            if y.box[0] <= cx <= y.box[2] and y.box[1] <= cy <= y.box[3]:
+                return True
+        return False
+
+    out: list[DeskBlob] = []
+    for b in sorted(blobs, key=lambda b: b.t_on):
+        m = next((o for o in out if same(o, b)), None)
+        if m is None:
+            out.append(DeskBlob(b.box, b.t_on, b.t_off, b.area, dict(b.meta)))
+            continue
+        m.box = (min(m.box[0], b.box[0]), min(m.box[1], b.box[1]), max(m.box[2], b.box[2]), max(m.box[3], b.box[3]))
+        m.t_on, m.t_off, m.area = min(m.t_on, b.t_on), max(m.t_off, b.t_off), max(m.area, b.area)
+        m.meta["merged"] = m.meta.get("merged", 1) + 1
+    return out
 
 
 def _iou(a, b) -> float:
