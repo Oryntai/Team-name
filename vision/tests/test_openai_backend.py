@@ -217,3 +217,12 @@ def test_call_estimate_follows_the_backend_that_answers():
     b.down_until = float("inf")
     assert expected_call_sec(b) == FALLBACK_CALL_SEC
 
+
+def test_mlx_without_measurements_is_planned_at_its_own_speed():
+    """Burst run 18.10 on MLX only: the 12 s default let the first job take 70 s of a 48 s share."""
+    from forte_vision.vlm import FALLBACK_CALL_SEC, MLXBackend, expected_call_sec, VLMStats
+
+    mlx = MLXBackend.__new__(MLXBackend)
+    mlx.stats = VLMStats()
+    assert expected_call_sec(mlx) == FALLBACK_CALL_SEC
+

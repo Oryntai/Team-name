@@ -71,6 +71,8 @@ def _local_snapshot(model_id: str) -> tuple[str, str]:
 class MLXBackend:
     """mlx-vlm (MIT). Картинки отдаём файлами во временном каталоге, который сразу удаляем."""
 
+    default_call_sec = FALLBACK_CALL_SEC  # пока нет своих замеров: 8 кадров на M1 Pro ≈ 30 с
+
     def __init__(self, model_id: str = "mlx-community/Qwen3-VL-8B-Instruct-4bit"):
         from mlx_vlm import generate, load
         from mlx_vlm.prompt_utils import apply_chat_template
@@ -300,12 +302,14 @@ def start_job(backend, deadline: float | None) -> None:
 
 def expected_call_sec(backend) -> float:
     """Оценка одного вызова для планирования окон: средняя по бэкенду, который сейчас отвечает."""
-    default = DEFAULT_CALL_SEC
     if isinstance(backend, FallbackBackend):
         if backend.primary_down:
-            backend, default = backend.secondary, FALLBACK_CALL_SEC
+            backend, default = backend.secondary, getattr(backend.secondary, "default_call_sec", FALLBACK_CALL_SEC)
         else:
             backend = backend.primary
+            default = getattr(backend, "default_call_sec", DEFAULT_CALL_SEC)
+    else:
+        default = getattr(backend, "default_call_sec", DEFAULT_CALL_SEC)
     stats = getattr(backend, "stats", None)
     if stats is None or stats.calls < 3 or stats.wall_sec <= 0:
         return default
