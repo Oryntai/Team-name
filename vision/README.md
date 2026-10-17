@@ -1,5 +1,13 @@
 # vision — локальный VLM-наблюдатель
 
+**В проде работает другой анализатор:** `FORTE_ANALYZER_FACTORY=forte_vision.anchored.analyzer:create_analyzer`
+(`src/forte_vision/anchored/`). RF-DETR nano находит моменты, Qwen3-VL-8B на `llama-server` отвечает на узкие
+вопросы по увеличенным вырезкам; MLX, `FORTE_VLM_BACKEND` и профили он не использует. Описание —
+[docs/SUBMISSION.md](../docs/SUBMISSION.md), раздел 3, и [docs/ml-integration.md](../docs/ml-integration.md).
+
+**Всё, что ниже, — прежний анализатор (observer, `forte_vision.backend_adapter:create_analyzer`).** Он остаётся
+в коде, но в проде не используется, и текст под новую схему не переписывался.
+
 Видео кассы (.mov) → наблюдения для правил. Vision только наблюдает: кандидаты-интервалы,
 кадры-доказательства по реальным PTS и предикаты `observed / not_observed / unclear`. Тип нарушения,
 норму и вердикт решают `decision/` и `rules/`. Всё работает локально, сеть при обработке не нужна
