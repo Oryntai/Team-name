@@ -31,6 +31,9 @@ def test_lock_after_leaving_uses_stand_up_time():
     probes = decide.plan(_people(ev, present=((0.0, 17.0),)), Z, 30.0)
     found = decide.judge(probes, _answer(probes, {"LOCK"}))
     assert [(f.check, f.t_main) for f in found] == [("LOCK", 15.0)]
+    # описание для проверяющего — что видно на этом ролике: момент, кадры, зона, подтверждённое
+    assert found[0].seen.startswith("после ухода кассира в 17.0 с; кадры ")
+    assert found[0].seen.endswith("экран — на экране открыт документ")
 
 
 def test_single_yes_is_not_enough():

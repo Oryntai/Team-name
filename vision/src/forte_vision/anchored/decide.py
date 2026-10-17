@@ -98,6 +98,7 @@ class Finding:
     t_end: float
     evidence: list[float]
     reason: str
+    seen: str = ""  # что видно на этом ролике — для описания нарушения проверяющему (по-русски)
 
 
 def _clip(t: float, dur: float) -> float:
@@ -338,6 +339,31 @@ def _near(people: People, t: float, box: Box | None) -> bool:
     return not (b[2] < x1 or b[0] > x2 or b[3] < y1 or b[1] > y2)
 
 
+_ZONE_RU = {"safe": "сейф", "screen": "экран", "desk": "стол", "door": "дверь", "counter": "счётная машинка"}
+_ANSWER_RU = {"cash": "деньги", "documents": "документы", "cash_bag": "инкассаторский мешок", "bag": "сумка или одежда",
+              "food": "еда", "drink": "напиток", "phone": "телефон", "document": "открыт документ"}
+_YES_RU = {"SAFE": "дверца сейфа открыта", "NOCLIENT": "кассир пересчитывает деньги", "KEYS": "ключ в замке сейфа",
+           "LOCK": "на экране открыт документ"}
+_FIXED_RU = {"DOOR": "створка двери открыта и через 5, и через 8 с (по пикселям кадра)",
+             "QUE": "у стола одновременно двое посетителей (по детектору людей)"}
+
+
+def _seen(p: Probe, yes: list[CropItem], answers: dict[str, CropAnswer]) -> str:
+    """«после ухода кассира в 19.2 с; кадры 24.1 и 26.4 с, стол — деньги»: момент, кадры, зона и что подтверждено."""
+    if p.fixed:
+        return f"{p.reason}; {_FIXED_RU.get(p.check, 'по детектору')}"
+    if not yes:
+        return p.reason
+    times = " и ".join(f"{it.t:.1f}" for it in sorted(yes, key=lambda it: it.t)[:3])
+    what = _YES_RU.get(p.check)
+    if what is None:
+        got = set()
+        for it in yes:
+            got |= {w for w in str(answers[it.key].answer).split("+") if not p.want or w in p.want}
+        what = ", ".join(_ANSWER_RU.get(w, w) for w in sorted(got)) or "да"
+    return f"{p.reason}; кадры {times} с, {_ZONE_RU.get(yes[0].zone, yes[0].zone)} — {what}"
+
+
 def judge(probes: list[Probe], answers: dict[str, CropAnswer]) -> list[Finding]:
     """Ответы модели -> подтверждённые нарушения. «unclear» — не «да»."""
     out: list[Finding] = []
@@ -345,7 +371,7 @@ def judge(probes: list[Probe], answers: dict[str, CropAnswer]) -> list[Finding]:
         if p.fixed is not None:
             if p.fixed:
                 out.append(Finding(p.check, p.t_main, p.t_start or p.t_main, p.t_end or p.t_main,
-                                   [p.t_main, p.t_end or p.t_main], p.reason))
+                                   [p.t_main, p.t_end or p.t_main], p.reason, _seen(p, [], answers)))
             continue
         if not p.items:
             continue
@@ -359,7 +385,10 @@ def judge(probes: list[Probe], answers: dict[str, CropAnswer]) -> list[Finding]:
             if not run:
                 continue
             t0 = run[0]
-            out.append(Finding(p.check, t0, t0, t0 + 4.0, [t0], f"{p.reason}: подтверждено на двух кадрах"))
+            nxt = next((b for a, b in zip(ys, ys[1:]) if a == t0), None)
+            pair = [it for it in yes if it.t in (t0, nxt)]
+            out.append(Finding(p.check, t0, t0, t0 + 4.0, [t0], f"{p.reason}: подтверждено на двух кадрах",
+                               _seen(p, pair, answers)))
             continue
         # «да» считаем по разным кадрам: один ответ, попавший в пробу дважды, — одно подтверждение
         yes = list({it.key: it for it in yes}.values())
@@ -367,7 +396,7 @@ def judge(probes: list[Probe], answers: dict[str, CropAnswer]) -> list[Finding]:
             continue
         ev_t = [p.t_main] + [it.t for it in yes[:2]]
         out.append(Finding(p.check, p.t_main, min([p.t_start or p.t_main] + ev_t), max([p.t_end or p.t_main] + ev_t),
-                           ev_t, p.reason))
+                           ev_t, p.reason, _seen(p, yes, answers)))
     return _dedupe(out)
 
 

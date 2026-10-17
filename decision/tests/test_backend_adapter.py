@@ -284,3 +284,15 @@ def test_soft_usable_or_unknown_support_keeps_strong_core(context, object_visibi
     )
     observed.events[0].visibility = object_visibility
     assert len(create_rules().evaluate(observed, context)) == 1
+
+
+def test_what_was_seen_on_this_video_follows_the_rule_template(context):
+    rules = create_rules()
+    observed = batch(
+        cashier_left_workstation="observed",
+        departure_before_client_service_completed="observed",
+    )
+    observed.events[0].note = "после ухода кассира в 3.0 с; кадры 4.0 и 5.0 с, стол — деньги"
+    events = rules.evaluate(observed, context)
+    template = {rule.rule_id: rule for rule in rules.rules}[events[0].rule_id].description_template
+    assert events[0].description == f"{template}\nЧто видно: после ухода кассира в 3.0 с; кадры 4.0 и 5.0 с, стол — деньги."

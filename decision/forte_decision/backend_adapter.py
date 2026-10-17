@@ -73,6 +73,7 @@ class BackendRules:
         if not observations.complete:
             raise IncompleteAnalysis("analysis coverage incomplete")
         candidates = {}
+        notes: dict[str, str] = {}  # candidate_id -> что видно на этом видео (от анализатора)
         named_visibility = {
             name for rule in self.rules for name in rule.visibility_required
         }
@@ -124,6 +125,8 @@ class BackendRules:
                 "sources": sorted(set(event.sources)),
             }
             candidate_id = _identity(identity)
+            if event.note:
+                notes[candidate_id] = event.note
             candidates[candidate_id] = Candidate(
                 candidate_id=candidate_id,
                 start_sec=event.t_start,
@@ -154,7 +157,8 @@ class BackendRules:
                     t_end=event.end_sec,
                     t_main=event.timecode_sec,
                     type=event.type,
-                    description=rule.description_template,
+                    description=_with_seen(rule.description_template,
+                                           [notes[c] for c in event.candidate_ids if c in notes]),
                     rule_id=rule.rule_id,
                     rule_title=f"{rule.source_document} — {rule.title}",
                     rule_section=rule.source_paragraph,
@@ -163,6 +167,12 @@ class BackendRules:
                 )
             )
         return output
+
+
+def _with_seen(template: str, notes: list[str]) -> str:
+    """Шаблон правила + что именно видно на этом видео (момент, кадры, зона, ответ модели)."""
+    seen = "; ".join(dict.fromkeys(n.strip() for n in notes if n.strip()))
+    return f"{template}\nЧто видно: {seen}." if seen else template
 
 
 def create_rules():

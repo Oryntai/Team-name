@@ -84,6 +84,7 @@ class ObservedEvent(EventSpan):
     observations: dict[str, Literal["observed", "not_observed", "unclear"]]
     visibility: dict[str, Literal["clear", "partial", "unusable"]] = Field(default_factory=dict)
     sources: list[Literal["vlm", "motion", "detector"]] = Field(min_length=1)
+    note: str = Field(default="", max_length=600, description="Что видно на этом видео — дополняет описание правила")
 
 
 class ObservationBatch(StrictModel):

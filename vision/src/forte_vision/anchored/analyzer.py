@@ -159,7 +159,8 @@ class AnchoredAnalyzer:
                 pts = sorted({m, *pts[:2]})
             lo, hi = min(pts + [src.snap(f.t_start)]), max(pts + [src.snap(min(f.t_end, dur))])
             events.append(ObservedEvent(t_start=lo, t_end=hi, t_main=m, frame_pts=pts,
-                                        observations={pred: "observed"}, sources=["detector", "vlm"]))
+                                        observations={pred: "observed"}, sources=["detector", "vlm"],
+                                        note=(f.seen or f.reason)[:600]))
 
         _write_trace(path, zones, people, probes, answers, found, blobs)
         n_items = len(event_items) + len(sweep_items)
