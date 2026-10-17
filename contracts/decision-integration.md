@@ -1,16 +1,18 @@
 # Граница backend ↔ decision
 
-Адаптер реализован: `FORTE_RULES_FACTORY=forte_decision.backend_adapter:create_rules`.
-Он принимает канонические ObservationBatch и AnalysisContext и возвращает list[RuleEvent].
+Rules-фабрика: `FORTE_RULES_FACTORY=forte_decision.backend_adapter:create_rules`.
+Она принимает канонические ObservationBatch и AnalysisContext и возвращает list[RuleEvent].
 JSON-схемы backend и внешний API не изменены.
 
-Актуальные команды, политика неопределённости, преобразование времён/доказательств и ограничения: [docs/ml-integration.md](../docs/ml-integration.md).
+В проде она подключена вместе с анализатором «по якорям» (`forte_vision.anchored.analyzer:create_analyzer`).
+Цепочка, предикаты, условия `failed` и настройки — [docs/ml-integration.md](../docs/ml-integration.md),
+описание для жюри — [docs/SUBMISSION.md](../docs/SUBMISSION.md).
 
-- Vision реализует analyze(context, video) и использует переданный VideoIO.
+- Vision реализует analyze(context, video). Таймкоды и кадры событий берутся из PTS переданного VideoIO; кадры для детектора и вырезок анализатор читает сам через PyAV.
 - Decision оценивает правила. Standalone Observation не является вторым wire-контрактом.
 - Worker проверяет реальные PTS и границы видео, извлекает JPEG, сериализует результат.
 - Норма передаётся отдельными полями RuleEvent; backend добавляет её в описание один раз.
-- Пообъектное clear не доказывает полную видимость всех позиций.
-- Неясные ключевые признаки без положительного события приводят к IncompleteAnalysis, не к no_violation.
+- Анализатор отдаёт только подтверждённые события: один предикат в состоянии `observed`, без пообъектной видимости.
+- Анализ, который нельзя считать полным, анализатор помечает `complete=False`; worker выдаёт `failed`, а не `no_violation`.
 
-Rules-фабрика не заменяет локальную модель. Пока не настроен рабочий analyzer, development unavailable по-прежнему даёт ошибку. Docker runtime должен дополнительно включать decision и каталог правил через FORTE_RULE_CATALOGS, а для реального ML — vision и локальные веса.
+Docker-образ ставит только backend. Для анализа нужны ещё decision, каталог правил (`FORTE_RULE_CATALOGS`), vision с RF-DETR и сервер модели, поэтому прод запускается нативно (`infra/mac/serve.sh`).
