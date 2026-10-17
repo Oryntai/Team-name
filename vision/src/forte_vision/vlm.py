@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import http.client
 import os
 import tempfile
 import time
@@ -198,17 +199,63 @@ class StubBackend:
         return a
 
 
+class FallbackBackend:
+    """Основной бэкенд (сервер модели на GPU-машине) и запасной локальный на этой же машине.
+
+    Сбой связи или кривой ответ основного — запрос сразу уходит запасному, а основной не
+    трогаем cooldown_sec секунд, чтобы не терять время на каждом окне. Потом пробуем снова.
+    """
+
+    _FAILURES = (OSError, http.client.HTTPException, ValueError, KeyError, IndexError)
+
+    def __init__(self, primary: VLMBackend, secondary: VLMBackend, cooldown_sec: float = 60.0,
+                 clock: Callable[[], float] = time.monotonic):
+        self.primary, self.secondary = primary, secondary
+        self.cooldown_sec, self.clock = cooldown_sec, clock
+        self.down_until = 0.0
+        self.model_id = f"{primary.model_id}|fallback:{secondary.model_id}"
+        self.revision = f"{primary.revision}|{secondary.revision}"
+        self.stats = VLMStats()
+        self.routing = {"primary_calls": 0, "fallback_calls": 0, "primary_failures": 0}
+
+    def ask(self, frames, question, max_tokens=128):
+        if self.clock() >= self.down_until:
+            try:
+                a = self.primary.ask(frames, question, max_tokens)
+            except self._FAILURES:
+                self.routing["primary_failures"] += 1
+                self.down_until = self.clock() + self.cooldown_sec
+            else:
+                self.routing["primary_calls"] += 1
+                self.stats.add(a)
+                return a
+        a = self.secondary.ask(frames, question, max_tokens)
+        self.routing["fallback_calls"] += 1
+        self.stats.add(a)
+        return a
+
+
+def _openai_from_env(model_id: str | None) -> OpenAICompatBackend:
+    # FORTE_VLM_URL — адрес локального сервера; ключ — из файла FORTE_VLM_KEY_FILE (не из аргументов)
+    url = os.environ.get("FORTE_VLM_URL")
+    if not url:
+        raise ValueError("для бэкенда openai задайте FORTE_VLM_URL (локальный llama-server / vLLM)")
+    key_file = os.environ.get("FORTE_VLM_KEY_FILE")
+    key = open(key_file, encoding="utf-8").read().strip() if key_file else None
+    timeout = float(os.environ.get("FORTE_VLM_TIMEOUT", "60"))
+    return OpenAICompatBackend(url, model_id or "local", key, timeout=timeout)
+
+
 def make_backend(kind: str, model_id: str | None = None) -> VLMBackend:
     if kind == "mlx":
         return MLXBackend(model_id) if model_id else MLXBackend()
     if kind == "transformers":
         return TransformersBackend(model_id) if model_id else TransformersBackend()
     if kind == "openai":
-        # FORTE_VLM_URL — адрес локального сервера; ключ — из файла FORTE_VLM_KEY_FILE (не из аргументов)
-        url = os.environ.get("FORTE_VLM_URL")
-        if not url:
-            raise ValueError("для бэкенда openai задайте FORTE_VLM_URL (локальный llama-server / vLLM)")
-        key_file = os.environ.get("FORTE_VLM_KEY_FILE")
-        key = open(key_file, encoding="utf-8").read().strip() if key_file else None
-        return OpenAICompatBackend(url, model_id or "local", key)
+        return _openai_from_env(model_id)
+    if kind == "openai+mlx":
+        # сервер модели на GPU-машине; если он недоступен — локальная MLX-модель (FORTE_VLM_FALLBACK_MODEL)
+        fallback = os.environ.get("FORTE_VLM_FALLBACK_MODEL", "mlx-community/Qwen3-VL-8B-Instruct-4bit")
+        return FallbackBackend(_openai_from_env(model_id), MLXBackend(fallback),
+                               cooldown_sec=float(os.environ.get("FORTE_VLM_RETRY_SEC", "60")))
     raise ValueError(f"неизвестный бэкенд VLM: {kind}")

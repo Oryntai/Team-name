@@ -324,6 +324,7 @@ def analyze_video(
         "profile": asdict(prof),
         "stage_timings": timings,
         "vlm": asdict(backend.stats),
+        "vlm_routing": dict(getattr(backend, "routing", {}) or {}),
         "screen_windows": len(windows),
         "valid_screen_windows": valid_screen_windows,
         "invalid_screen_windows": invalid_screen_windows,

@@ -234,6 +234,8 @@ class VisionAnalyzer:
                 "coverage_complete": bool(obs["coverage_complete"]),
                 "candidates": len(events),
                 "vlm_calls": int(diag.get("vlm", {}).get("calls", 0)),
+                # счётчики переключения GPU-сервер -> локальная модель (накопительные за жизнь worker)
+                **{f"vlm_{k}": int(v) for k, v in (diag.get("vlm_routing") or {}).items()},
             }
         )
         complete = obs["analysis_status"] == "complete" and obs["coverage_complete"]
