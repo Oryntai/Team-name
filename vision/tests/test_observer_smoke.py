@@ -172,3 +172,21 @@ def test_object_predicate_needs_detector_confirmation(synthetic_video):
     obs, _ = analyze_video(synthetic_video, StubBackend(_drink_everywhere), video_id="syn",
                            profile="fast", detector=_FakeDetector(["cup"]))
     assert any(c["predicates"]["food_or_drink_at_desk"] == "observed" for c in obs["candidates"])
+
+
+def test_recheck_budget_drops_low_priority_candidates_instead_of_partial(synthetic_video):
+    import time
+
+    def slow(times, question):
+        if "Categories:" in question:
+            return json.dumps([{"category": "other_suspicious", "start": 0, "end": 19.5}])
+        time.sleep(0.4)
+        return json.dumps({n: "no" for n in [*PREDICATES, *VISIBILITY]})
+
+    obs, diag = analyze_video(synthetic_video, StubBackend(slow), video_id="syn", profile="full",
+                              deadline_sec=1.5)
+    validate_observation(obs)
+    assert obs["coverage_complete"] is True
+    assert obs["analysis_status"] == "complete"
+    assert diag["budget_dropped_count"] > 0
+    assert obs["candidates"] and all(c["predicates"] for c in obs["candidates"])

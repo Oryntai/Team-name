@@ -258,8 +258,15 @@ def analyze_video(
     names_p, names_v = list(predicates.PREDICATES), list(predicates.VISIBILITY)
     table = {**predicates.PREDICATES, **predicates.VISIBILITY}
     q_pred = predicates.predicate_question(names_p + names_v, table)
-    for c in selected:
-        if time.monotonic() > deadline:
+    # Бюджет: перепроверка — самый дорогой шаг (~десятки секунд на кандидата). Когда следующая
+    # перепроверка уже не успевает, оставшиеся (наименее приоритетные) кандидаты снимаются с отбора
+    # заранее — как при меньшем max_rechecks, — а не превращают весь анализ в partial.
+    recheck_sec: list[float] = []
+    budget_dropped: list[_Cand] = []
+    for i, c in enumerate(selected):
+        started = time.monotonic()
+        if started > deadline or (recheck_sec and started + max(recheck_sec) > deadline):
+            budget_dropped = selected[i:] if recheck_sec else []
             break
         times = sorted(set(np.linspace(c.start, c.end, prof.recheck_frames).round(3).tolist()) | {round(c.main, 3)})
         frames = src.grab_at(times, size=prof.recheck_size)
@@ -282,6 +289,10 @@ def analyze_video(
                     tri[name] = "not_observed"
                     vetoed.setdefault(id(c), []).append(name)
         rechecked[id(c)] = ({n: tri[n] for n in names_p}, {n: tri[n] for n in names_v}, [t for t, _ in frames])
+        recheck_sec.append(time.monotonic() - started)
+    if budget_dropped:
+        dropped_ids = {id(c) for c in budget_dropped}
+        selected = [c for c in selected if id(c) not in dropped_ids]
     mark("recheck", t0)
 
     # 7. сборка Observation: только отобранные кандидаты
@@ -343,6 +354,7 @@ def analyze_video(
         "invalid_screen_windows": invalid_screen_windows,
         "empty_screen_windows": empty_screen_windows,
         "pool_selected_count": len(selected),
+        "budget_dropped_count": len(budget_dropped),
         "pool_dropped_count": len(pool) - len(selected),
         "screen_covered_until": round(covered_until, 3),
         "pool_size": len(pool),
