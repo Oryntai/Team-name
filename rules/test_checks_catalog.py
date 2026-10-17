@@ -30,7 +30,7 @@ def observation_for(predicates):
 
 def test_one_rule_per_check_predicate_with_official_source():
     rules = load()
-    assert len({r.rule_id for r in rules}) == len(rules) == 13
+    assert len({r.rule_id for r in rules}) == len(rules) == 14
     assert len({r.required for r in rules}) == len(rules)
     for rule in rules:
         assert len(rule.required) == 1 and not rule.applicability and not rule.exceptions
@@ -40,9 +40,26 @@ def test_one_rule_per_check_predicate_with_official_source():
 
 
 def test_rules_without_a_direct_norm_say_so():
+    """A norm applied by meaning says so both in the citation and in the text the jury reads."""
     for rule in load():
-        if rule.rule_id.startswith("TEAM_"):
-            assert any(w in rule.source_paragraph for w in ("нет", "не найдена", "трактовка"))
+        if "по смыслу" in rule.source_paragraph:
+            assert "по смыслу" in rule.description_template, rule.rule_id
+        assert "не найдена" not in rule.source_paragraph, rule.rule_id
+
+
+def test_fields_fit_the_backend_contract():
+    """RuleEvent limits: an overlong field would turn every firing of the rule into failed."""
+    for rule in load():
+        assert len(rule.type) <= 200 and len(rule.source_paragraph) <= 200, rule.rule_id
+        assert len(f"{rule.source_document} — {rule.title}") <= 500, rule.rule_id
+        assert ";" not in rule.source_document, rule.rule_id  # the UI splits the basis at the first ";"
+
+
+def test_no_citations_of_repealed_acts():
+    """Law No. 2444 of 1995 and NBK resolution No. 48 lost force in 2026."""
+    for rule in load():
+        text = json.dumps(rule.to_json() if hasattr(rule, "to_json") else rule.__dict__, ensure_ascii=False)
+        assert "2444" not in text and "№ 48" not in text and "Z950002444" not in text, rule.rule_id
 
 
 def test_each_rule_fires_only_on_its_own_predicate():
