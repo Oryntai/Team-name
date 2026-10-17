@@ -216,6 +216,9 @@ def plan(people: People, zones: Zones, dur: float, *, known_predicates: set[str]
     for e in [e for e in ev if e.kind == "cashier_sits" and e.meta.get("after") != "enter"]:
         if not allow("SAFE") or not _first(ev, "cashier_stands", after=e.t - 30.0, before=e.t):
             continue
+        again = _first(ev, "cashier_stands", after=e.t + 0.1)
+        if again is not None and again.t - e.t < 6.0:
+            continue  # села и сразу снова встала (часто — закрыть сейф): открытый сейф в этот миг ещё не нарушение
         ts2 = [t for t in (e.t + 1.0, e.t + 3.0) if t < dur - 0.1]
         if len(ts2) == 2:
             probes.append(Probe("SAFE", max(0.0, e.t - 0.5), _items("SAFEs", "safe", z.get("safe"), ts2, "safe_open", dur),

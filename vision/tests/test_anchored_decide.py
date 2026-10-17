@@ -183,3 +183,11 @@ def test_queue_jump_is_not_claimed_when_the_desk_side_is_unknown():
                      desk_dir=0, events=ev)
     assert any(p.check == "QUE" for p in decide.plan(known, Z, 30.0))
     assert not any(p.check == "QUE" for p in decide.plan(unknown, Z, 30.0))
+
+
+def test_open_safe_after_sitting_down_only_counts_if_she_stays_seated():
+    went = [Event("cashier_stands", 30.0), Event("cashier_sits", 37.2)]
+    stays = decide.plan(_people(went), Z, 60.0)
+    back_up = decide.plan(_people(went + [Event("cashier_stands", 40.0)]), Z, 60.0)  # встала закрыть сейф (X-19)
+    assert any(p.check == "SAFE" and p.reason.startswith("сейф после возвращения") for p in stays)
+    assert not any(p.check == "SAFE" and p.reason.startswith("сейф после возвращения") for p in back_up)
