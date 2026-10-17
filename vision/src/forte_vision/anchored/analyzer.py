@@ -66,7 +66,8 @@ class AnchoredAnalyzer:
 
         # 2) зоны: 2–4 вопроса модели на ролик
         try:
-            zones = find_zones(path, scan, self.asker)
+            # замок сейфа нужен только проверке «ключ в замке»; нет её в каталоге — лишний вопрос модели не задаём
+            zones = find_zones(path, scan, self.asker, find_lock=decide.PREDICATE["KEYS"] in self.known)
         except Exception as e:  # модель недоступна — работаем с тем, что дал детектор
             from .types import Zones
             zones = Zones(boxes={}, source={}, diag={"error": repr(e)[:200]})

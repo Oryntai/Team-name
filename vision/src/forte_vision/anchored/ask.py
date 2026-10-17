@@ -27,7 +27,7 @@ from PIL import Image
 
 from .types import Box, CropAnswer, CropItem
 
-PROMPT_VERSION = "ask-v1"
+PROMPT_VERSION = "ask-v2"  # v2: каждый вопрос в пакете звучит один раз (Q1, Q2…), картинки ссылаются на него
 MAX_ITEMS = 8  # вырезок на запрос: больше — модель начинает путать картинки
 PAD = 0.30  # поле вокруг зоны с каждой стороны, доля размера зоны
 PAD_MAX = 0.08  # но не больше этой доли кадра: у большой зоны (стол, стена с дверью) поле съедает увеличение
@@ -419,12 +419,17 @@ class CropAsker:
         head = ""
         if context.strip():
             head += f"Known facts from the video: {context.strip()}\n\n"
+        # вопрос звучит один раз на пакет: модель тратит время в основном на чтение запроса (prefill),
+        # а длинный вопрос «что лежит на столе» в пакете из 8 вырезок повторялся бы 8 раз
+        qs = list(dict.fromkeys(it.question for it in items))
+        qid = {q: i for i, q in enumerate(qs, 1)}
         head += (f"You will see {len(items)} images. Each one is an enlarged crop of one area of the scene "
                  "from a fixed ceiling CCTV camera in a bank cash room, at one moment. "
-                 "Answer each question about its own image only.")
+                 "Each image has its own question (Q1, Q2, ... below); answer it about that image only.\n"
+                 + "\n".join(f"Q{i}: {q}" for i, q in enumerate(qs, 1)))
         content: list = [{"type": "text", "text": head}]
         for k, (it, im) in enumerate(zip(items, images), 1):
-            text = f"Image {k} — key={it.key}, area={it.zone}, t={it.t:.1f}s. Question: {it.question}"
+            text = f"Image {k} — key={it.key}, area={it.zone}, t={it.t:.1f}s. Question: Q{qid[it.question]}"
             content.append({"type": "text", "text": text})
             content.append({"type": "image_url", "image_url": {"url": _jpeg_url(im)}})
         def one(it):

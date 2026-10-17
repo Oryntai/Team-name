@@ -158,7 +158,8 @@ def test_ask_batches_cache_and_prompt(synthetic_video, tmp_path):
     assert sum(c["type"] == "image_url" for c in content) == MAX_ITEMS
     assert content[0]["text"].startswith("Known facts from the video: Cashier left at 12.0 s.")
     assert "You see" not in content[0]["text"]  # без frames_preamble
-    assert content[1]["text"].startswith("Image 1 — key=k0, area=safe, t=1.0s. Question: Is the safe door open?")
+    assert "Q1: Is the safe door open?" in content[0]["text"]  # вопрос один раз на пакет
+    assert content[1]["text"].startswith("Image 1 — key=k0, area=safe, t=1.0s. Question: Q1")
     assert content[2]["type"] == "image_url" and content[2]["image_url"]["url"].startswith("data:image/jpeg;base64,")
     assert "Return ONLY a JSON object" in content[-1]["text"] and '"k7": "yes"|"no"|"unclear"' in content[-1]["text"]
     assert b0["temperature"] == 0.0 and b0["max_tokens"] == 12 * MAX_ITEMS + 40
