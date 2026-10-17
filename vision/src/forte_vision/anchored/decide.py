@@ -169,11 +169,15 @@ def plan(people: People, zones: Zones, dur: float, *, known_predicates: set[str]
             gone = e.t + 1.0
         ts = [gone + 0.5, min(gone + 3.0, hi), min(gone + 6.0, hi)]
         t_main = _leave_time(e)
-        # LOCK: только открытый документ/окно (белое) — синий экран входа и рабочий стол на 464 px не различить
-        for check, zone, q, want in (("LOCK", "screen", "screen_what", ("document",)),
-                                     ("LEAVE", "desk", "desk_valuables", ()), ("SAFE", "safe", "safe_open", ())):
+        # LOCK: только открытый документ/окно (белое) — синий экран входа и рабочий стол на 464 px не различить.
+        # Стол после ухода — вопрос с вариантами, а не «есть ли ценности?»: на него X-24 (папка с документами
+        # лежит весь ролик) получил 0 «да» из 3. LEAVE и BAG читают одни и те же вырезки (ключи LEAVE@t).
+        for check, zone, q, tag, want in (("LOCK", "screen", "screen_what", "LOCK", ("document",)),
+                                          ("LEAVE", "desk", "desk_what", "LEAVE", ("cash", "documents")),
+                                          ("BAG", "desk", "desk_what", "LEAVE", ("cash_bag",)),
+                                          ("SAFE", "safe", "safe_open", "SAFE", ())):
             if allow(check):
-                probes.append(Probe(check, t_main, _items(check, zone, z.get(zone), ts, q, dur),
+                probes.append(Probe(check, t_main, _items(tag, zone, z.get(zone), ts, q, dur),
                                     t_start=t_main, t_end=_clip(ts[-1], dur), reason=f"после ухода кассира в {e.t:.1f} с",
                                     want=want))
         if allow("KEYS"):
@@ -204,6 +208,17 @@ def plan(people: People, zones: Zones, dur: float, *, known_predicates: set[str]
             if late and None not in states:
                 probes.append(Probe("DOOR", t_in + 1.0, [], t_start=t_in, t_end=_clip(late[-1], dur),
                                     reason=f"дверь после входа кассира в {t_in:.1f} с", fixed=all(states)))
+
+    # 2б) Вернулась на место после того, как вставала (часто — к сейфу): сейф закрыт? X-20: сходила к сейфу, села,
+    #     сейф остался открытым; обход эти моменты пропускает — кассир «у сейфа», когда стол стоит рядом с ним.
+    for e in [e for e in ev if e.kind == "cashier_sits" and e.meta.get("after") != "enter"]:
+        if not allow("SAFE") or not _first(ev, "cashier_stands", after=e.t - 30.0, before=e.t):
+            continue
+        ts2 = [t for t in (e.t + 1.0, e.t + 3.0) if t < dur - 0.1]
+        if len(ts2) == 2:
+            probes.append(Probe("SAFE", max(0.0, e.t - 0.5), _items("SAFEs", "safe", z.get("safe"), ts2, "safe_open", dur),
+                                need_yes=2, t_start=max(0.0, e.t - 0.5), t_end=_clip(ts2[-1], dur),
+                                reason=f"сейф после возвращения на место в {e.t:.1f} с"))
 
     # 3) Смена клиентов: деньги предыдущего клиента ещё на столе, когда подходит следующий.
     #    Смотрим в конце промежутка между клиентами, до того как новый что-то отдал: после его прихода на столе

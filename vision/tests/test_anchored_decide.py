@@ -141,3 +141,24 @@ def test_second_visitor_across_during_visit_is_queue_violation_timed_when_he_sto
     p2 = _people(ev_level, present=((0.0, 30.0),))
     p2.visitors = [late]
     assert [f.check for f in decide.judge(decide.plan(p2, Z, 30.0), {})] == []
+
+
+def test_documents_left_after_leaving_and_safe_left_open_after_sitting_back():
+    """X-24: папка лежит весь ролик, кассир ушла -> LEAVE по вопросу с вариантами.
+    X-20: сходила к сейфу (встала 4.4), села 6.0, сейф открыт через 1 и 3 с -> SAFE."""
+    ev = [Event("cashier_leaves", 8.0, meta={"t_exit": 9.0})]
+    probes = decide.plan(_people(ev, present=((0.0, 8.0),)), Z, 15.0)
+    ans = _answer(probes, set(), desk="documents")
+    assert [f.check for f in decide.judge(probes, ans)] == ["LEAVE"]
+    ans = _answer(probes, set(), desk="cash_bag")
+    assert [f.check for f in decide.judge(probes, ans)] == ["BAG"]
+    ev2 = [Event("cashier_stands", 4.4, t_end=6.0), Event("cashier_sits", 6.0)]
+    probes2 = decide.plan(_people(ev2, present=((0.0, 4.4), (6.0, 11.6))), Z, 11.6)
+    safe = [it for it in decide.all_items(probes2) if it.key.startswith("SAFEs@")]
+    assert [it.t for it in safe] == [7.0, 9.0]
+    ans2 = _answer(probes2, set())
+    for it in safe:
+        ans2[it.key] = CropAnswer(it.key, "yes")
+    assert [(f.check, f.t_main) for f in decide.judge(probes2, ans2)] == [("SAFE", 5.5)]
+    ans2[safe[1].key] = CropAnswer(safe[1].key, "no")  # закрыла через пару секунд — не нарушение
+    assert decide.judge(probes2, ans2) == []
