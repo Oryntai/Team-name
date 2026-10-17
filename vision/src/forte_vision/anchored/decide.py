@@ -106,7 +106,9 @@ def _items(tag: str, zone: str, box: Box | None, times, q: str, dur: float, zoom
     if box is None:
         return []
     ch = {"desk_what": DESK_CHOICES, "desk_obj": OBJ_CHOICES, "screen_what": SCREEN_CHOICES}.get(q, ())
-    return [CropItem(key=f"{tag}@{_clip(t, dur):g}", t=_clip(t, dur), zone=zone, box=box, question=Q[q], zoom=zoom,
+    # у конца ролика несколько моментов прижимаются к одному кадру: это один кадр, а не два подтверждения
+    times = sorted({_clip(t, dur) for t in times})
+    return [CropItem(key=f"{tag}@{t:g}", t=t, zone=zone, box=box, question=Q[q], zoom=zoom,
                      choices=ch, open=q == "desk_obj") for t in times]
 
 
@@ -245,7 +247,9 @@ def plan(people: People, zones: Zones, dur: float, *, known_predicates: set[str]
     #     стеклом, пока первый не выйдет). Решает детектор людей, без модели: на 40 роликах событие есть только
     #     в роликах с нарушением. Таймкод — второй дошёл до стола и остановился (X-18: появился 15.4, эталон 20).
     for e in [e for e in ev if e.kind == "third_person" and e.meta.get("side") == "across"]:
-        if allow("QUE"):
+        # сторона стола не определилась (другой ракурс): «через стол» тогда — любой человек в кадре, и без модели
+        # это ложная тревога на любую пару людей; не утверждаем
+        if allow("QUE") and people.desk_dir != 0:
             t_main = _settle_time(people, e)
             probes.append(Probe("QUE", t_main, [], t_start=e.t, t_end=_clip(e.t_end if e.t_end else t_main, dur),
                                 reason=f"второй посетитель у стола во время визита с {e.t:.1f} с", fixed=True))
@@ -352,7 +356,9 @@ def judge(probes: list[Probe], answers: dict[str, CropAnswer]) -> list[Finding]:
             t0 = run[0]
             out.append(Finding(p.check, t0, t0, t0 + 4.0, [t0], f"{p.reason}: подтверждено на двух кадрах"))
             continue
-        if len(yes) < min(p.need_yes, len(p.items)):
+        # «да» считаем по разным кадрам: один ответ, попавший в пробу дважды, — одно подтверждение
+        yes = list({it.key: it for it in yes}.values())
+        if len(yes) < min(p.need_yes, len({it.key for it in p.items})):
             continue
         ev_t = [p.t_main] + [it.t for it in yes[:2]]
         out.append(Finding(p.check, p.t_main, min([p.t_start or p.t_main] + ev_t), max([p.t_end or p.t_main] + ev_t),

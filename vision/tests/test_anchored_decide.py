@@ -162,3 +162,24 @@ def test_documents_left_after_leaving_and_safe_left_open_after_sitting_back():
     assert [(f.check, f.t_main) for f in decide.judge(probes2, ans2)] == [("SAFE", 5.5)]
     ans2[safe[1].key] = CropAnswer(safe[1].key, "no")  # закрыла через пару секунд — не нарушение
     assert decide.judge(probes2, ans2) == []
+
+
+def test_leaving_near_the_end_needs_two_different_frames():
+    # кассир вышла за 2 с до конца: поздние моменты прижимаются к последнему кадру — это один кадр, а не два «да»
+    ev = [Event("cashier_leaves", 12.0, meta={"t_exit": 12.5})]
+    probes = decide.plan(_people(ev, present=((0.0, 12.0),)), Z, 14.7)
+    lock = next(p for p in probes if p.check == "LOCK")
+    assert len({it.key for it in lock.items}) == len(lock.items)
+    last = max(lock.items, key=lambda it: it.t)
+    answers = _answer(probes, set())
+    answers[last.key] = CropAnswer(last.key, "document")
+    assert [f for f in decide.judge(probes, answers) if f.check == "LOCK"] == []
+
+
+def test_queue_jump_is_not_claimed_when_the_desk_side_is_unknown():
+    ev = [Event("third_person", 15.4, 22.0, {"side": "across", "tid": 7})]
+    known = _people(ev)
+    unknown = People(cashier=known.cashier, cashier_present=known.cashier_present, visits=[], visitors=[],
+                     desk_dir=0, events=ev)
+    assert any(p.check == "QUE" for p in decide.plan(known, Z, 30.0))
+    assert not any(p.check == "QUE" for p in decide.plan(unknown, Z, 30.0))

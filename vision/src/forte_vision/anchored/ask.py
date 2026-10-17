@@ -480,7 +480,9 @@ class CropAsker:
                 text, err = rec["raw"], None
             else:
                 images = [crop_image(frames[it.t][1], it.box, it.zoom) for it in ch]
-                max_tokens = max(12 * len(ch) + 40, sum(len(it.key) // 3 + 8 + 12 * bool(it.choices) for it in ch) + 40)
+                # открытый ответ {"what": до 6 слов, "group": ...} длиннее выбора: без запаса он обрезался
+                max_tokens = max(12 * len(ch) + 40, sum(len(it.key) // 3 + 8 + 12 * bool(it.choices) + 20 * bool(it.open)
+                                                        for it in ch) + 40)
                 text, err = self._call("ask", self.build_content(ch, images, context), max_tokens, len(ch))
                 if err is None:
                     self._cache_put(key, {"raw": text, "keys": [it.key for it in ch]})
