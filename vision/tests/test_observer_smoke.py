@@ -190,3 +190,32 @@ def test_recheck_budget_drops_low_priority_candidates_instead_of_partial(synthet
     assert obs["analysis_status"] == "complete"
     assert diag["budget_dropped_count"] > 0
     assert obs["candidates"] and all(c["predicates"] for c in obs["candidates"])
+
+
+class _PeopleDetector(_FakeDetector):
+    def __init__(self, n):
+        super().__init__([])
+        self.n = n
+
+    def detect(self, frames, batch=8):
+        from forte_vision.scene import FrameDets
+
+        return [FrameDets(t, [(0.0, 0.0, 5.0, 5.0)] * self.n, []) for t, _ in frames]
+
+
+def _outsider_everywhere(times, question):
+    if "Categories:" in question:
+        return json.dumps([{"category": "person_enters_cash_area", "start": EVENT[0], "end": EVENT[1]}])
+    answers = {n: "no" for n in [*PREDICATES, *VISIBILITY]}
+    answers["outsider_in_cash_room"] = "yes"
+    return json.dumps(answers)
+
+
+
+
+def test_outsider_needs_a_third_person_on_frames(synthetic_video):
+    for people, expected in ((2, "not_observed"), (3, "observed")):
+        obs, _ = analyze_video(synthetic_video, StubBackend(_outsider_everywhere), video_id="syn",
+                               profile="fast", detector=_PeopleDetector(people))
+        assert any(c["predicates"]["outsider_in_cash_room"] == expected for c in obs["candidates"])
+        assert all(c["predicates"]["outsider_in_cash_room"] in ("not_observed", expected) for c in obs["candidates"])

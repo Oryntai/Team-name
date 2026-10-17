@@ -24,7 +24,7 @@ PREDICATES: dict[str, str] = {
     "cashier_absent_from_room": "The cashier walks out of the room through the door, or the cashier is no longer in the room in the later frames.",
     "workstation_left_unsecured": "While the cashier is away from the desk, banknotes, a cash bundle, a cash bag or documents are still lying on the desk, or the laptop screen still shows a working application (table/form) instead of a lock screen or closed lid.",
     "cash_room_door_left_open": "The door of the cash room stays open (door leaf turned inward/outward, corridor visible through the doorway) for several seconds while the cashier works, not only while someone is walking through it.",
-    "outsider_in_cash_room": "A second visitor enters the cash room while another client is being served, or a person stands in the doorway or next to the cash desk watching the cashier, without handing over cash, documents or a cash bag.",
+    "outsider_in_cash_room": "Besides the cashier and the one client sitting at the desk, a THIRD person enters the cash room or stands in the doorway or next to the desk. A single client walking in and sitting down to be served is normal and is NOT this.",
     "safe_left_open": "The safe door is open while the cashier is seated at the desk or doing other work, i.e. not at the moment of putting items into or taking items out of the safe.",
     "previous_client_cash_on_desk": "Banknotes that belong to an earlier client remain on the open desk while the next client is served, or banknotes of two different clients are put together into one stack.",
     "client_left_before_count_done": "The client stands up or walks away while the cashier is still counting the client's banknotes or has not yet counted them.",
@@ -37,6 +37,12 @@ PREDICATES: dict[str, str] = {
 DETECTOR_BACKED: dict[str, set[str]] = {
     "food_or_drink_at_desk": {"cup", "bottle"},
     "personal_items_on_desk": {"handbag", "backpack", "suitcase"},
+}
+
+# Признаки, которые принимаются только при минимальном числе людей на тех же кадрах (детектор).
+# Обычный визит: кассир + клиент = 2 человека; посторонний означает третьего.
+MIN_PERSONS: dict[str, int] = {
+    "outsider_in_cash_room": 3,
 }
 
 VISIBILITY: dict[str, str] = {

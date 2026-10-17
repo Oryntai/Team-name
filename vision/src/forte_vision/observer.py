@@ -255,6 +255,7 @@ def analyze_video(
     rechecked: dict[int, tuple[dict, dict, list[float]]] = {}
     item_seen: dict[int, list[str]] = {}
     vetoed: dict[int, list[str]] = {}
+    persons_seen: dict[int, int] = {}
     names_p, names_v = list(predicates.PREDICATES), list(predicates.VISIBILITY)
     table = {**predicates.PREDICATES, **predicates.VISIBILITY}
     q_pred = predicates.predicate_question(names_p + names_v, table)
@@ -286,6 +287,12 @@ def analyze_video(
             # объекта утверждение "ясно видно" не принимается (частая галлюцинация чашки/сумки).
             for name, classes in predicates.DETECTOR_BACKED.items():
                 if tri.get(name) == "observed" and not seen_items & classes:
+                    tri[name] = "not_observed"
+                    vetoed.setdefault(id(c), []).append(name)
+            max_persons = max((len(d.persons) for d in dets), default=0)
+            persons_seen[id(c)] = max_persons
+            for name, minimum in predicates.MIN_PERSONS.items():
+                if tri.get(name) == "observed" and max_persons < minimum:
                     tri[name] = "not_observed"
                     vetoed.setdefault(id(c), []).append(name)
         rechecked[id(c)] = ({n: tri[n] for n in names_p}, {n: tri[n] for n in names_v}, [t for t, _ in frames])
@@ -329,7 +336,8 @@ def analyze_video(
         )
         diag_cands[cid] = {"kinds": sorted(c.kinds), "priority": round(c.priority, 3),
                            "motion_score": round(c.motion_score, 5), "rechecked": id(c) in rechecked,
-                           "detected_items": item_seen.get(id(c), []), "detector_veto": vetoed.get(id(c), [])}
+                           "detected_items": item_seen.get(id(c), []), "max_persons": persons_seen.get(id(c)),
+                           "detector_veto": vetoed.get(id(c), [])}
 
     all_rechecked = len(rechecked) == len(selected)
     obs = {
