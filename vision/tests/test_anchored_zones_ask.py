@@ -437,3 +437,13 @@ def test_cash_bag_is_one_word_and_screen_choices():
     assert norm_choices("a sign-in screen with a clock", scr) == "lock"
     assert norm_choices(["document"], scr) == "document"
     assert norm_choices("lid closed", scr) == "off"
+
+
+def test_video_id_is_by_content_not_name(tmp_path):
+    """Оценка кладёт ролик ссылкой <job_id>.mov: ключ кеша не должен зависеть от имени."""
+    from forte_vision.anchored.ask import CropAsker
+    a, b, c = tmp_path / "job1.mov", tmp_path / "job2.mov", tmp_path / "other.mov"
+    a.write_bytes(b"x" * 5000)
+    b.write_bytes(b"x" * 5000)
+    c.write_bytes(b"y" * 5000)
+    assert CropAsker._video_id(str(a)) == CropAsker._video_id(str(b)) != CropAsker._video_id(str(c))

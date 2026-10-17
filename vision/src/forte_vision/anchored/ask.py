@@ -357,8 +357,19 @@ class CropAsker:
 
     @staticmethod
     def _video_id(path: str) -> list:
+        """Ролик по содержимому, а не по имени: оценка и сервис кладут его как <job_id>.mov, и ключ по имени
+        не совпадал между прогонами — кеш ответов не срабатывал ни разу. Размер + sha1 первого и последнего МБ."""
         p = Path(path)
-        return [p.name, p.stat().st_size if p.exists() else -1]
+        if not p.exists():
+            return [p.name, -1]
+        size = p.stat().st_size
+        h = hashlib.sha1()
+        with open(p, "rb") as f:
+            h.update(f.read(1 << 20))
+            if size > 2 << 20:
+                f.seek(-(1 << 20), 2)
+                h.update(f.read(1 << 20))
+        return [size, h.hexdigest()[:16]]
 
     def _cache_get(self, key: str) -> dict | None:
         if key in self._mem:
