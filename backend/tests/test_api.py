@@ -142,3 +142,32 @@ def test_slow_upload_uses_request_arrival_deadline(tmp_path):
         return next(message["status"] for message in responses if message["type"] == "http.response.start")
 
     assert asyncio.run(request()) == 408
+
+
+
+def test_public_key_is_one_stable_key_that_opens_jury_routes(tmp_path):
+    settings = Settings(_env_file=None, data_dir=tmp_path, api_key="test-only-key")
+    with TestClient(create_app(settings)) as client:
+        first = client.get("/ui-api/key").json()["api_key"]
+        assert first.startswith("fk_") and len(first) > 40
+        assert {client.get("/ui-api/key").json()["api_key"] for _ in range(3)} == {first}
+        assert client.get("/api/v1/jobs/absent", headers={"X-API-Key": first}).status_code == 404
+        assert client.get("/api/v1/jobs/absent", headers={"X-API-Key": first + "x"}).status_code == 401
+        assert client.get("/api/v1/jobs/absent", headers={"X-API-Key": "test-only-key"}).status_code == 404
+    # A restarted service hands out the same key.
+    with TestClient(create_app(settings)) as client:
+        assert client.get("/ui-api/key").json()["api_key"] == first
+
+
+def test_public_key_can_be_switched_off(tmp_path):
+    on = Settings(_env_file=None, data_dir=tmp_path, api_key="test-only-key")
+    with TestClient(create_app(on)) as client:
+        public = client.get("/ui-api/key").json()["api_key"]
+    off = Settings(_env_file=None, data_dir=tmp_path, api_key="test-only-key", public_api_keys=False)
+    with TestClient(create_app(off)) as client:
+        assert client.get("/ui-api/key").status_code == 404
+        assert client.get("/api/v1/jobs/absent", headers={"X-API-Key": public}).status_code == 401
+        assert client.get("/api/v1/jobs/absent", headers={"X-API-Key": "test-only-key"}).status_code == 404
+    unconfigured = Settings(_env_file=None, data_dir=tmp_path / "other", public_api_keys=False)
+    with TestClient(create_app(unconfigured)) as client:
+        assert client.get("/api/v1/jobs/absent", headers={"X-API-Key": "x"}).status_code == 503

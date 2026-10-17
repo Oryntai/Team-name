@@ -21,6 +21,10 @@ class JobAccepted(StrictModel):
     job_id: str
 
 
+class IssuedApiKey(StrictModel):
+    api_key: str
+
+
 class JobProcessing(JobAccepted):
     status: Literal["processing"] = "processing"
 

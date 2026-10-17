@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     api_key: SecretStr = SecretStr("")
     data_dir: Path = Path("data")
     deadline_seconds: float = Field(default=300, gt=0, le=300)
-    max_upload_mb: int = Field(default=64, ge=29, le=1024)
+    max_upload_mb: int = Field(default=50, ge=29, le=1024)
     max_pending_jobs: int = Field(default=5, ge=1, le=100)
     profile: str = "standard"
     analyzer_factory: str = "backend.adapters.unavailable:create_analyzer"
@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     frontend_dist: Path = Path("frontend/dist")
     worker_poll_sec: float = Field(default=0.2, gt=0, le=5)
     max_attempts: int = Field(default=3, ge=1, le=10)
+    # One shared public key for the jury API, shown on the site's API page. False hides it and stops accepting it.
+    public_api_keys: bool = True
 
     @property
     def db_path(self) -> Path:

@@ -5,6 +5,25 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/ui-api/key": {
+      "get": {
+        "summary": "Public Key",
+        "description": "The shared jury key shown on the API page: created on first request, the same value afterwards.",
+        "operationId": "public_key_ui_api_key_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedApiKey"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/ui-api/analyze": {
       "post": {
         "summary": "Analyze",
@@ -255,6 +274,20 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "IssuedApiKey": {
+        "properties": {
+          "api_key": {
+            "type": "string",
+            "title": "Api Key"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "api_key"
+        ],
+        "title": "IssuedApiKey"
       },
       "JobAccepted": {
         "properties": {

@@ -6,6 +6,12 @@
 
 A key committed to an open-source repository, embedded in JavaScript, or shown on a public page is public to everyone. Do not use such a value as the jury credential. Generate a key for the running deployment and give it only to approved judges through a private channel. This repository has no deployed host or private judge-delivery channel configured.
 
+## Shared key on the site
+
+For the hackathon the jury takes one shared key from the site's **API** page. `GET /ui-api/key` creates `fk_…` (`secrets.token_urlsafe(32)`) on the first request, stores it in the `public_api_key` table and returns the same value on every later request and after restarts, so reloading the page never changes it. The page shows it right away and puts it into the cURL / PowerShell / Python examples. `/api/v1` accepts it next to the private `FORTE_API_KEY`.
+
+The key is public by design: anyone who opens the site can read it. To stop it after the event set `FORTE_PUBLIC_API_KEYS=false` and restart the API: the page stops showing it and `/api/v1` rejects it; only `FORTE_API_KEY` keeps working. To rotate it instead, delete the row from `public_api_key`; the next request creates a new key. Tests: `backend/tests/test_api.py` (`test_public_key_*`).
+
 ## Generate or rotate
 
 From the repository root:

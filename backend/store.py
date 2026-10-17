@@ -57,12 +57,29 @@ class Store:
                     key TEXT PRIMARY KEY,
                     value REAL NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS public_api_key (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    api_key TEXT NOT NULL,
+                    created_at REAL NOT NULL
+                );
             """)
             connection.execute("BEGIN IMMEDIATE")
             columns = {row["name"] for row in connection.execute("PRAGMA table_info(jobs)")}
             if "diagnostics_json" not in columns:
                 connection.execute("ALTER TABLE jobs ADD COLUMN diagnostics_json TEXT")
             connection.commit()
+
+    def public_api_key(self, new_key: str | None = None) -> str | None:
+        """The one shared public key. With new_key, creates it on first use; later calls return the same value."""
+        with self._connect() as connection:
+            row = connection.execute("SELECT api_key FROM public_api_key WHERE id=1").fetchone()
+            if row is not None or new_key is None:
+                return row["api_key"] if row else None
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute("INSERT OR IGNORE INTO public_api_key(id, api_key, created_at) VALUES (1, ?, ?)",
+                               (new_key, time.time()))
+            connection.commit()
+            return connection.execute("SELECT api_key FROM public_api_key WHERE id=1").fetchone()["api_key"]
 
     @staticmethod
     def _row(row: sqlite3.Row | None) -> dict | None:
