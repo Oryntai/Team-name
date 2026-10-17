@@ -27,10 +27,17 @@ def test_model_down_never_means_clean():
     assert trustworthy([], [], {}, DOWN_ZONES) is False
 
 
-def test_event_question_failed_or_not_asked_is_not_clean():
+def test_half_of_event_questions_failed_or_none_asked_is_not_clean():
     answers = {EV[0].key: _ans(EV[0].key), EV[1].key: _ans(EV[1].key, err=True)}
-    assert trustworthy([], EV, answers, OK_ZONES) is False
+    assert trustworthy([], EV, answers, OK_ZONES) is False  # сорвалась половина
     assert trustworthy([], EV, {}, OK_ZONES) is False  # время кончилось до первого вопроса
+
+
+def test_single_failed_question_among_many_still_gives_verdict():
+    ev = EV + [CropItem("SAFE@13", 13.0, "safe", BOX, "q")]
+    answers = {it.key: _ans(it.key) for it in ev}
+    answers["SAFE@13"] = _ans("SAFE@13", err=True)
+    assert trustworthy([], ev, answers, OK_ZONES) is True
 
 
 def test_clean_when_event_questions_answered_even_if_sweep_failed():

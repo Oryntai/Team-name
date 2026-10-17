@@ -168,7 +168,7 @@ def _failed(a: CropAnswer) -> bool:
 def trustworthy(found, event_items, answers: dict[str, CropAnswer], zones) -> bool:
     """Можно ли выдать вердикт. Нашли нарушение — да: вердикт «нарушение» верен, даже если часть вопросов
     не дошла до модели. Ничего не нашли — «чисто» можно сказать, только если модель ответила хоть на что-то
-    и ни один вопрос по событиям не сорвался: иначе «чисто» значило бы «модель лежала», а пропуск
+    и сорвалось меньше половины вопросов по событиям: иначе «чисто» значило бы «модель лежала», а пропуск
     нарушения хуже, чем честное «не обработано» (complete=False -> failed)."""
     if found:
         return True
@@ -177,9 +177,11 @@ def trustworthy(found, event_items, answers: dict[str, CropAnswer], zones) -> bo
         return False  # модель не ответила ни на один вопрос
     if not answers and zones.diag.get("error"):
         return False  # даже зоны не нашли: модель недоступна с самого начала
-    if event_items and not any(it.key in answers for it in event_items):
+    asked = [answers[it.key] for it in event_items if it.key in answers]
+    if event_items and not asked:
         return False  # были моменты для проверки, но ни один вопрос не задан (время кончилось раньше)
-    return not any(_failed(answers[it.key]) for it in event_items if it.key in answers)
+    # одиночный сорвавшийся вопрос не делает почти полный разбор «необработанным»; половина и больше — делает
+    return sum(_failed(a) for a in asked) < 0.5 * len(asked) if asked else True
 
 
 def _forget(asker) -> None:
