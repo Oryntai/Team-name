@@ -315,6 +315,52 @@ class VideoIO:
         """Return the nearest actual frame (ties choose the earlier frame)."""
         return self._extract([self._nearest_index(float(timestamp_sec))])[0]
 
+    def frames_at(self, timestamps_sec: list[float]) -> list[VideoFrame]:
+        """Resolve up to 256 requested times in one batch, preserving input order.
+
+        Returned times are canonical PTS, not the requested times. The same
+        original JPEG cache is used by inference and final evidence extraction.
+        """
+        if not isinstance(timestamps_sec, (list, tuple)) or len(timestamps_sec) > 256:
+            raise ValueError("Request at most 256 timestamps per batch")
+        if any(isinstance(t, bool) or not isinstance(t, (int, float)) for t in timestamps_sec):
+            raise ValueError("Timestamps must be numbers, not booleans")
+        return self._extract([self._nearest_index(float(t)) for t in timestamps_sec])
+
+    def iter_frames(self, interval_sec: float, batch_size: int = 256):
+        """Yield interval samples across the entire video using bounded batches.
+
+        This is a batched iterator, not a second decoder. Each batch requires at
+        most one FFmpeg extraction. Unlike sample_frames, 256 is a batch cap,
+        not a whole-video cap. Resize inference images after receiving them;
+        the shared cache preserves original evidence JPEGs.
+        """
+        if isinstance(interval_sec, bool) or not isinstance(interval_sec, (int, float)) or not math.isfinite(interval_sec) or interval_sec < 1e-6:
+            raise ValueError("interval_sec must be finite and at least 1e-6")
+        if type(batch_size) is not int or not 1 <= batch_size <= 256:
+            raise ValueError("batch_size must be between 1 and 256")
+        metadata = self.probe()
+        pending = []
+        # Iterate actual frames, avoiding unbounded target loops for tiny intervals.
+        next_target = 0.0
+        for index, pts in enumerate(metadata.frame_pts):
+            if pts + 1e-6 < next_target:
+                continue
+            # First actual frame at or after a scheduled point. On VFR input,
+            # elapsed empty slots collapse to this actual frame, never fake PTS.
+            pending.append(index)
+            # Advance beyond this frame; never emit repeated copies of a frame.
+            next_target = (math.floor((pts + 1e-6) / interval_sec) + 1) * interval_sec
+            if len(pending) == batch_size:
+                for frame in self._extract(pending):
+                    self._remaining()
+                    yield frame
+                pending = []
+        if pending:
+            for frame in self._extract(pending):
+                self._remaining()
+                yield frame
+
     def sample_frames(self, interval_sec: float, max_frames: int = 256) -> list[VideoFrame]:
         """Sample from zero at the requested interval, capped at max_frames.
 
