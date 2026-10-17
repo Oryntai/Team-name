@@ -69,6 +69,8 @@ Q["desk_obj"] = ("Look at the object in the middle of this crop, lying on the de
                  "other = any other object; none = no object, just the desk surface, a shadow or equipment "
                  "(laptop, telephone, counting machine).")
 OBJ_CHOICES = ("cash", "documents", "cash_bag", "bag", "food", "drink", "phone", "other", "none")
+# FOOD — только еда: банка или стакан на столе — не нарушение (нормы нет; чистый X-25 с двумя банками на столе)
+FOOD_WANT = ("food",)
 SCREEN_CHOICES = ("document", "desktop", "lock", "off")
 
 
@@ -280,11 +282,11 @@ def plan(people: People, zones: Zones, dur: float, *, known_predicates: set[str]
     sweep = [("SAFE", "safe", "safe_open", "SAFEp", ())]
     if blobs is None:
         sweep += [("ITEMS", "desk", "desk_what", "DESKp", ("bag",)),
-                  ("FOOD", "desk", "desk_what", "DESKp", ("food", "drink"))]
+                  ("FOOD", "desk", "desk_what", "DESKp", FOOD_WANT)]
     else:
         # 6) Новый предмет на столе: что это — по плотной вырезке, на двух кадрах (OBJi@t общие для проверок)
         for b, its in blob_items(blobs, dur):
-            for check, want in (("ITEMS", ("bag",)), ("FOOD", ("food", "drink"))):
+            for check, want in (("ITEMS", ("bag",)), ("FOOD", FOOD_WANT)):
                 if allow(check) and its:
                     probes.append(Probe(check, b.t_on, its, need_yes=2, t_start=b.t_on, t_end=min(b.t_off, dur),
                                         reason=f"новый предмет на столе {b.t_on:.1f}–{b.t_off:.1f} с", want=want))

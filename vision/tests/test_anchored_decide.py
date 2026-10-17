@@ -105,8 +105,10 @@ def test_food_and_items_share_one_desk_question():
     desk = [it for it in decide.all_items(probes) if it.key.startswith("DESKp@")]
     assert desk and all(it.choices for it in desk)
     assert len({it.key for it in desk}) == len(desk)  # общий вопрос не задаётся дважды
-    answers = _answer(probes, set(), desk="drink+documents")
+    answers = _answer(probes, set(), desk="food+documents")
     assert [f.check for f in decide.judge(probes, answers)] == ["FOOD"]
+    # напиток на столе — не нарушение (нормы нет; чистый X-25 с банками)
+    assert decide.judge(probes, _answer(probes, set(), desk="drink+documents")) == []
 
 
 def test_lock_screen_after_leaving_is_not_a_violation():

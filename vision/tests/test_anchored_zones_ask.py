@@ -448,3 +448,12 @@ def test_video_id_is_by_content_not_name(tmp_path):
     b.write_bytes(b"x" * 5000)
     c.write_bytes(b"y" * 5000)
     assert CropAsker._video_id(str(a)) == CropAsker._video_id(str(b)) != CropAsker._video_id(str(c))
+
+
+def test_equipment_named_cash_something_is_not_cash():
+    from forte_vision.anchored.ask import norm_choices
+    from forte_vision.anchored.decide import OBJ_CHOICES
+    assert norm_choices({"what": "cash counting machine", "group": "cash"}, OBJ_CHOICES) == "other"
+    assert norm_choices({"what": "black cash register", "group": "cash"}, OBJ_CHOICES) == "other"
+    assert norm_choices({"what": "a crumpled banknote", "group": "cash"}, OBJ_CHOICES) == "cash"
+    assert norm_choices({"what": "two cans", "group": "drink"}, OBJ_CHOICES) == "drink"
