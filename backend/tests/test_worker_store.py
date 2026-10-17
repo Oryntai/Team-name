@@ -146,6 +146,8 @@ class SyntheticAnalyzer:
             return ObservationBatch(complete=False, diagnostics={"frames_seen": 3}, events=[
                 ObservedEvent(t_start=pts[0], t_end=pts[2], t_main=pts[1], frame_pts=list(pts[:3]),
                               observations={"synthetic": "observed"}, sources=["detector"])])
+        if context.profile in ("partial_clean", "partial_zero"):
+            return ObservationBatch(complete=False, events=[], coverage=0.6 if context.profile == "partial_clean" else 0.0)
         if context.profile == "budget":
             return ObservationBatch(complete=True, events=[], diagnostics={"budget": context.analysis_budget_sec})
         if context.profile == "clean":
@@ -471,4 +473,16 @@ def test_model_refuses_to_start_when_the_catalog_misses_analyzer_predicates(work
         assert job["status"] == "failed" and job["error_code"] == "model_startup_failed"
         assert job["diagnostics"] == {"error_type": "CatalogMismatch"}
         assert supervisor.store.health()["model_ready"] is False
+
+
+def test_partial_analysis_without_findings_is_clean_only_if_something_was_covered(worker_settings, synthetic_video):
+    """Team decision 18.10: failed counts as unprocessed, so a partly covered clean video is no_violation."""
+    with Supervisor(worker_settings) as supervisor:
+        _enqueue(supervisor.store, "partial-clean", synthetic_video, profile="partial_clean")
+        _enqueue(supervisor.store, "partial-zero", synthetic_video, profile="partial_zero")
+        clean, zero = _drain(supervisor, ["partial-clean", "partial-zero"])
+        assert clean["status"] == "done" and clean["result"] == {
+            "job_id": "partial-clean", "status": "done", "verdict": "no_violation", "violations": []}
+        assert clean["diagnostics"]["partial_result"] is True and clean["diagnostics"]["coverage"] == 0.6
+        assert zero["status"] == "failed" and zero["error_code"] == "analysis_incomplete"
 

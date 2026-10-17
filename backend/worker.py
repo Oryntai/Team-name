@@ -217,14 +217,16 @@ def _analyze_job(job: dict, config: dict, analyzer: Any, rules: Any,
     evaluated = rules.evaluate(batch, context)
     if not isinstance(evaluated, list):
         raise ValueError("Rules must return a list of RuleEvent")
-    # Partial coverage keeps the violations already proven on the analysed part (FAQ 11), but an
-    # incomplete analysis without any of them stays failed: it is never reported as no_violation.
-    if not batch.complete and not evaluated:
+    # Partial coverage (team decision 18.10): violations proven on the analysed part are reported (FAQ 11);
+    # without them the result is no_violation for the analysed part, flagged partial_result in diagnostics.
+    # The jury counts failed as unprocessed. Nothing covered, or coverage not reported, stays failed.
+    if not batch.complete and not evaluated and not (batch.coverage or 0) > 0:
         raise IncompleteAnalysis("Analysis coverage incomplete")
     partial_note = (" Анализ завершён не по всему видео: нарушение найдено на проверенной части, "
                     "остальные фрагменты не проверены." if not batch.complete else "")
     if diagnostics is not None and not batch.complete:
         diagnostics["partial_result"] = True
+        diagnostics["coverage"] = batch.coverage
     violations = []
     for item in evaluated:
         _require_time(context.deadline_at)

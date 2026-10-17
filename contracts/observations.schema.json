@@ -91,6 +91,21 @@
       "title": "Events",
       "type": "array"
     },
+    "coverage": {
+      "anyOf": [
+        {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Share of the video the analyzer covered; required for a partial clean result",
+      "title": "Coverage"
+    },
     "diagnostics": {
       "additionalProperties": {
         "anyOf": [

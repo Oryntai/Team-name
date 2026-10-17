@@ -92,6 +92,8 @@ class ObservedEvent(EventSpan):
 class ObservationBatch(StrictModel):
     complete: bool
     events: list[ObservedEvent]
+    coverage: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)] | None = Field(
+        default=None, description="Share of the video the analyzer covered; required for a partial clean result")
     diagnostics: dict[str, str | Annotated[float, Field(allow_inf_nan=False)] | int | bool | None] = Field(default_factory=dict)
 
 

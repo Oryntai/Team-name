@@ -74,8 +74,8 @@ class BackendRules:
         context = AnalysisContext.model_validate(context.model_dump())
         if time.time() >= context.deadline_at:
             raise TimeoutError("analysis deadline exceeded")
-        # A partial batch still yields the violations proven on the covered part (FAQ 11:
-        # one violation found, another fragment unclear -> violation). It never yields a negative.
+        # A partial batch yields the violations proven on the covered part (FAQ 11). Whether a partial
+        # batch without them is clean or failed is the worker's decision (coverage policy).
         candidates = {}
         named_visibility = {
             name for rule in self.rules for name in rule.visibility_required
@@ -142,15 +142,12 @@ class BackendRules:
             context.job_id,
             tuple(candidates.values()),
             self.rules,
-            analysis_complete=observations.complete,
+            analysis_complete=True,
             mode=self.mode,
             max_anchor_delta_sec=self.max_anchor_delta_sec,
         )
-        if not result.events:
-            if not observations.complete:
-                raise IncompleteAnalysis("analysis coverage incomplete")
-            if result.status != "complete":
-                raise IncompleteAnalysis("unresolved observations prevent a clean negative")
+        if result.status != "complete":
+            raise IncompleteAnalysis("unresolved observations prevent a clean negative")
         catalog = {rule.rule_id: rule for rule in self.rules}
         output = []
         for event in result.events:

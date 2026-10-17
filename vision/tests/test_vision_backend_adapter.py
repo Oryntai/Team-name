@@ -343,3 +343,17 @@ def test_prose_instead_of_json_is_asked_again_once(synthetic_video):
     assert obs["coverage_complete"]
     assert any(c["predicates"]["personal_items_on_desk"] == "observed" for c in obs["candidates"])
 
+
+def test_adapter_reports_coverage_of_a_partial_analysis(synthetic_video):
+    def respond(times, question):
+        if question.startswith("List every step") and max(times) < 7.0:  # first of three windows
+            raise ConnectionResetError("tunnel down")
+        return "[]"
+
+    a = backend_adapter.VisionAnalyzer.__new__(backend_adapter.VisionAnalyzer)
+    a.backend, a.detector, a.reserve = StubBackend(respond), None, 0.0
+    ctx = contracts.AnalysisContext(job_id="cov", video_path=synthetic_video, deadline_at=time.time() + 120)
+    batch = a.analyze(ctx, actual_video(synthetic_video))
+    assert not batch.complete and batch.events == []
+    assert batch.coverage == pytest.approx(2 / 3) and batch.diagnostics["coverage"] == 0.667
+

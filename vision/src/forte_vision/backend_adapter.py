@@ -262,7 +262,10 @@ class VisionAnalyzer:
             }
         )
         complete = obs["analysis_status"] == "complete" and obs["coverage_complete"]
-        return ObservationBatch(complete=complete, events=events, diagnostics=flat)
+        windows = int(diag.get("timeline_windows") or 0)
+        coverage = 1.0 if complete else (int(diag.get("timeline_covered_windows") or 0) / windows if windows else 0.0)
+        flat["coverage"] = round(coverage, 3)
+        return ObservationBatch(complete=complete, events=events, coverage=coverage, diagnostics=flat)
 
 
 def create_analyzer() -> VisionAnalyzer:
