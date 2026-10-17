@@ -782,7 +782,7 @@ import { NORMS } from "./norms.js";
     elements.basisId.textContent = basis.id;
     elements.basisId.hidden = !basis.id;
     const norm = NORMS[basis.id];
-    elements.basisQuote.textContent = norm ? `«${typeset(norm.quote)}»` : "";
+    elements.basisQuote.textContent = norm ? `«${typeset(norm.quote)}»${norm.clause ? ` — ${typeset(norm.clause)}` : ""}` : "";
     elements.basisQuote.hidden = !norm;
     elements.sourceName.textContent = norm?.short ?? "Текст нормы";
     elements.sourceLink.title = norm?.document ?? "";
