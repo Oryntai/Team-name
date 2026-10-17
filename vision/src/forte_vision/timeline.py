@@ -232,3 +232,50 @@ def run_checklist(steps: list[tuple[float, str]], duration: float) -> list[Viola
     if tl.by["queue_jump"]:
         out.append(_v("QUE", tl.by["queue_jump"][0], "обслуживание вне очереди", duration))
     return out
+
+
+# Верификатор: точный вопрос по плотным кадрам вокруг найденного нарушения.
+# (вопрос, нарушение при ответе "no" вместо "yes", окно кадров относительно main_sec)
+VERIFY: dict[str, tuple[str, bool, tuple[float, float]]] = {
+    "DOC": ("Before the cashier takes the money or bag, does the client hand over or show an ID card, passport "
+            "or a phone with a digital ID, and does the cashier look at it?", True, (-25.0, 2.0)),
+    "MIX": ("Are banknotes of a previous client still lying on the desk while the next client is served, or are "
+            "two different piles of banknotes put together?", False, (-6.0, 6.0)),
+    "LOCK": ("When the cashier walks away, does the laptop screen still show a working application (a table or "
+             "form) rather than a lock screen or a closed lid?", False, (-4.0, 8.0)),
+    "LEAVE": ("When the cashier walks away, are cash or documents still lying on the desk?", False, (-2.0, 8.0)),
+    "SAFE": ("Is the safe door left standing open while the cashier is not putting anything in or taking "
+             "anything out of the safe?", False, (0.0, 8.0)),
+    "DOOR": ("After the cashier comes into the room, is the room door left standing open?", False, (-1.0, 8.0)),
+    "NOCLIENT": ("Is the client already gone while the cashier counts the client's money?", False, (-6.0, 4.0)),
+    "ITEMS": ("Is a coat, jacket, handbag or other bag lying on the cash desk?", False, (-1.0, 6.0)),
+    "FOOD": ("Is there a cup, glass, bottle or food on the cash desk, or does the cashier eat or drink?", False,
+             (-1.0, 6.0)),
+    "AUTH": ("Does the cashier check the banknotes with a detector lamp or a counting machine?", True, (-2.0, 10.0)),
+    "REG": ("Between taking the money out of the cash bag and putting it into the safe, does the cashier count "
+            "the money or work on the laptop?", True, (-15.0, 3.0)),
+    "BAG": ("Is a cash bag left lying on the desk without being counted when the cashier walks away?", False,
+            (-2.0, 8.0)),
+    "QUE": ("While one client is waiting, does the cashier serve another person who came later?", False, (-8.0, 8.0)),
+}
+
+
+def verify_question(check: str) -> str:
+    question = VERIFY[check][0]
+    return question + ' Answer with ONLY one word: "yes", "no" or "unclear".'
+
+
+def parse_verdict(text: str) -> str:
+    word = re.sub(r"[^a-z]", " ", text.lower()).split()
+    for w in word[:5]:
+        if w in ("yes", "no", "unclear"):
+            return w
+    return "unclear"
+
+
+def confirmed(check: str, answer: str) -> bool:
+    """Нарушение остаётся, если верификатор его подтверждает или не может решить (пропуск хуже ложной тревоги)."""
+    if answer == "unclear":
+        return True
+    inverted = VERIFY[check][1]
+    return answer == ("no" if inverted else "yes")

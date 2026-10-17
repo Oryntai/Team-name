@@ -51,6 +51,7 @@ class Profile:
     timeline_min_window_sec: float = 8.0
     timeline_max_windows: int = 8     # длинные ролики — шире окна, реже кадры, тот же бюджет запросов
     timeline_size: tuple[int, int] | None = None
+    verify_frames: int = 6
 
 
 # Стартовые параметры, не оптимум: подбираются замерами и качеством на dev.
@@ -430,6 +431,29 @@ def _analyze_timeline(vid, src, info, backend, prof, deadline, timings, t_start,
     coverage_complete = covered == len(windows)
     violations = timeline.run_checklist(steps, dur) if coverage_complete else []
 
+    # Верификация: точный вопрос по плотным кадрам вокруг каждого найденного нарушения.
+    t0 = time.monotonic()
+    verdicts, kept = [], []
+    for v in violations:
+        if time.monotonic() > deadline:
+            kept.append(v)  # не успели проверить — оставляем как есть, пропуск хуже ложной тревоги
+            verdicts.append({"check": v.check, "answer": "not_run"})
+            continue
+        lo, hi = timeline.VERIFY[v.check][2]
+        a, b = max(0.0, v.main_sec + lo), min(dur, v.main_sec + hi)
+        frames = src.grab_at([round(a + (k + 0.5) * (b - a) / prof.verify_frames, 3)
+                              for k in range(prof.verify_frames)], size=prof.timeline_size)
+        frames = [(t, im) for t, im in frames if t <= dur + 1e-6]
+        pts_pool.extend(t for t, _ in frames)
+        answer = timeline.parse_verdict(backend.ask(frames, timeline.verify_question(v.check), max_tokens=8).text) \
+            if frames else "unclear"
+        verdicts.append({"check": v.check, "answer": answer})
+        if timeline.confirmed(v.check, answer):
+            kept.append(v)
+    timings["verify"] = round(time.monotonic() - t0, 2)
+    rejected = [v for v in violations if v not in kept]
+    violations = kept
+
     pool = np.unique(np.asarray(pts_pool or [0.0], dtype=float))
     out_cands = []
     for k, v in enumerate(sorted(violations, key=lambda v: v.main_sec)):
@@ -477,6 +501,8 @@ def _analyze_timeline(vid, src, info, backend, prof, deadline, timings, t_start,
         "timeline_dropped_items": dropped,
         "timeline_steps": [[round(t, 2), e] for t, e in sorted(steps)],
         "violations": [{"check": v.check, "main_sec": v.main_sec, "reason": v.reason} for v in violations],
+        "verifier": verdicts,
+        "rejected_by_verifier": [{"check": v.check, "main_sec": v.main_sec} for v in rejected],
         "video": asdict(info),
     }
     save_audit(vid, obs, diag, [(v.start_sec, v.end_sec) for v in violations], [])

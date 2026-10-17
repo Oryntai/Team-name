@@ -66,3 +66,27 @@ def test_every_check_has_a_predicate_and_parser_drops_unknown_items():
     assert ok and dropped == 1 and steps == [(3.0, "door_open"), (5.0, "food_drink")]
     assert parse_timeline("not json", 0, 10) == ([], False, 0)
     assert set(e for _, e in steps) <= set(EVENTS)
+
+
+def test_verifier_semantics():
+    from forte_vision.timeline import VERIFY, confirmed, parse_verdict
+
+    assert set(VERIFY) == set(CHECKS)
+    assert parse_verdict("Yes.") == "yes" and parse_verdict(" no ") == "no" and parse_verdict("maybe") == "unclear"
+    assert confirmed("FOOD", "yes") and not confirmed("FOOD", "no") and confirmed("FOOD", "unclear")
+    # DOC asks whether the document WAS shown: "no" confirms the violation
+    assert confirmed("DOC", "no") and not confirmed("DOC", "yes")
+
+
+def test_observer_drops_violation_the_verifier_rejects(synthetic_video):
+    from forte_vision import analyze_video
+    from forte_vision.vlm import StubBackend
+
+    def respond(times, question):
+        if "Return ONLY a JSON list" in question:
+            return json.dumps([{"event": "food_drink", "t": times[0]}, {"event": "food_drink", "t": times[-1]}])
+        return "no"
+
+    obs, diag = analyze_video(synthetic_video, StubBackend(respond), video_id="syn", profile="fast")
+    assert obs["analysis_status"] == "complete" and obs["candidates"] == []
+    assert diag["rejected_by_verifier"] and all(v["answer"] == "no" for v in diag["verifier"])
