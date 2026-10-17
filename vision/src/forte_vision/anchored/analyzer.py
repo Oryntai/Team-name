@@ -52,6 +52,7 @@ class AnchoredAnalyzer:
 
         t0 = time.monotonic()
         deadline = t0 + max(10.0, context.deadline_at - time.time() - self.reserve)
+        _forget(self.asker)  # ответы по прошлому ролику в памяти процесса не держим
         src = VideoIOSource(video, context.video_path)
         dur = float(src.info.duration_sec)
         path = str(context.video_path)
@@ -86,7 +87,14 @@ class AnchoredAnalyzer:
             if time.monotonic() > deadline - 12.0:
                 break
             try:
-                for a in self.asker.ask(path, batch, ctx):
+                got = self.asker.ask(path, batch, ctx)
+                # сервер модели моргнул (туннель переподключается, перегрузка) — переспросить, пока есть время
+                for wait in (3.0, 8.0):
+                    if not any(_failed(a) for a in got) or time.monotonic() + wait > deadline - 12.0:
+                        break
+                    time.sleep(wait)
+                    got = self.asker.ask(path, batch, ctx)
+                for a in got:
                     answers[a.key] = a
                 asked += len(batch)
             except Exception as e:
@@ -94,6 +102,7 @@ class AnchoredAnalyzer:
                 break
         timings["t_ask"] = round(time.monotonic() - t0, 2)
         found = decide.judge(probes, answers)
+        complete = trustworthy(found, event_items, answers, zones)
 
         events = []
         for f in found:
@@ -124,9 +133,11 @@ class AnchoredAnalyzer:
             "findings": ";".join(f"{f.check}@{f.t_main:.1f}" for f in found)[:300],
             "funnel": decide.funnel(probes, answers, found)[:400],  # CHECK:проб/без_зоны/спрошено/да/подтв.
             "unclear": sum(1 for a in answers.values() if a.answer == "unclear"),
+            "vlm_errors": sum(1 for a in answers.values() if _failed(a)),
+            "vlm_ground_error": str(zones.diag.get("error") or "")[:200],
             **timings,
         }
-        return ObservationBatch(complete=True, events=events, diagnostics=diag)
+        return ObservationBatch(complete=complete, events=events if complete else [], diagnostics=diag)
 
 
 def _write_trace(path, zones, people, probes, answers, found) -> None:
@@ -148,6 +159,33 @@ def _write_trace(path, zones, people, probes, answers, found) -> None:
     }
     Path(out).mkdir(parents=True, exist_ok=True)
     (Path(out) / (Path(path).stem + ".json")).write_text(json.dumps(rec, ensure_ascii=False, default=str, indent=1))
+
+
+def _failed(a: CropAnswer) -> bool:
+    return a.raw.startswith("error:")
+
+
+def trustworthy(found, event_items, answers: dict[str, CropAnswer], zones) -> bool:
+    """Можно ли выдать вердикт. Нашли нарушение — да: вердикт «нарушение» верен, даже если часть вопросов
+    не дошла до модели. Ничего не нашли — «чисто» можно сказать, только если модель ответила хоть на что-то
+    и ни один вопрос по событиям не сорвался: иначе «чисто» значило бы «модель лежала», а пропуск
+    нарушения хуже, чем честное «не обработано» (complete=False -> failed)."""
+    if found:
+        return True
+    ok = [a for a in answers.values() if not _failed(a)]
+    if answers and not ok:
+        return False  # модель не ответила ни на один вопрос
+    if not answers and zones.diag.get("error"):
+        return False  # даже зоны не нашли: модель недоступна с самого начала
+    if event_items and not any(it.key in answers for it in event_items):
+        return False  # были моменты для проверки, но ни один вопрос не задан (время кончилось раньше)
+    return not any(_failed(answers[it.key]) for it in event_items if it.key in answers)
+
+
+def _forget(asker) -> None:
+    mem = getattr(asker, "_mem", None)
+    if isinstance(mem, dict):
+        mem.clear()
 
 
 def _chunks(xs, n):
