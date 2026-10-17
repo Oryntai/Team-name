@@ -46,6 +46,68 @@ def _intervals(values):
     return result
 
 
+RECHECK_FLAGS = (
+    "points_with_nearby_rechecked_candidate",
+    "core_all_observed_any_rule",
+    "core_unclear_any_rule",
+    "core_explicitly_false_any_rule",
+    "applicability_explicit_false_when_core_observed",
+    "exception_observed_when_core_observed",
+    "exception_unclear_when_core_observed",
+    "engine_supported_nearby",
+    "engine_rejected_nearby",
+    "engine_unresolved_nearby",
+)
+
+
+def _point_recheck_flags(
+    point, candidates, candidate_diagnostics, engine_diagnostics, rules
+):
+    """Describe values/outcomes; never infer an event category or a new verdict."""
+    nearby = {
+        candidate.candidate_id: candidate
+        for candidate in candidates
+        if candidate.start_sec - 1 <= point <= candidate.end_sec + 1
+        and candidate_diagnostics.get(candidate.candidate_id, {}).get("rechecked")
+        is True
+    }
+    flags = set()
+    if nearby:
+        flags.add("points_with_nearby_rechecked_candidate")
+    catalog = {rule.rule_id: rule for rule in rules}
+    for row in engine_diagnostics:
+        candidate = nearby.get(row.get("candidate_id"))
+        if candidate is None or row.get("outcome") == "not_targeted":
+            continue
+        outcome = row.get("outcome")
+        if outcome in ("supported", "rejected", "unresolved"):
+            flags.add("engine_" + outcome + "_nearby")
+        rule = catalog.get(row.get("rule_id"))
+        if rule is None:
+            continue
+        core = [candidate.predicates.get(name, "unclear") for name in rule.required]
+        if "unclear" in core:
+            flags.add("core_unclear_any_rule")
+        if "not_observed" in core:
+            flags.add("core_explicitly_false_any_rule")
+        if not all(value == "observed" for value in core):
+            continue
+        flags.add("core_all_observed_any_rule")
+        if any(
+            candidate.predicates.get(name, "unclear") == "not_observed"
+            for name in rule.applicability
+        ):
+            flags.add("applicability_explicit_false_when_core_observed")
+        exceptions = [
+            candidate.predicates.get(name, "unclear") for name in rule.exceptions
+        ]
+        if "observed" in exceptions:
+            flags.add("exception_observed_when_core_observed")
+        if "unclear" in exceptions:
+            flags.add("exception_unclear_when_core_observed")
+    return flags
+
+
 def aggregate_stages(evaluation_dir, audit_dir, gold, rules):
     evaluate([], gold)  # Validate labels, identities, and point timestamps.
     counts = Counter()
@@ -53,6 +115,8 @@ def aggregate_stages(evaluation_dir, audit_dir, gold, rules):
     available = Counter()
     transitions = Counter()
     binary = Counter()
+    recheck_flags = Counter()
+    audit_quality = Counter()
     final_matched = final_labels = 0
     for label in gold:
         counts["files"] += 1
@@ -148,8 +212,33 @@ def aggregate_stages(evaluation_dir, audit_dir, gold, rules):
             continue
         counts["audit_available_positive_files"] += 1
         counts["audit_available_positive_points"] += len(points)
+        audit_quality["analysis_" + observation.analysis_status + "_files"] += 1
+        audit_quality[
+            (
+                "coverage_complete_files"
+                if observation.coverage_complete
+                else "coverage_incomplete_files"
+            )
+        ] += 1
+        for key in ("invalid_screen_windows", "empty_screen_windows"):
+            value = audit["diagnostics"].get(key)
+            if type(value) is int and value >= 0:
+                audit_quality[key + "_diagnostic_available_files"] += 1
+                audit_quality[key + "_total"] += value
+                audit_quality[key + "_nonzero_files"] += value > 0
+            else:
+                audit_quality[key + "_diagnostic_missing_files"] += 1
         for point in points:
             time = point["timecode_sec"]
+            recheck_flags.update(
+                _point_recheck_flags(
+                    time,
+                    candidates,
+                    diagnostics,
+                    result.diagnostics,
+                    rules,
+                )
+            )
             hits = {
                 stage: any(start - 1 <= time <= end + 1 for start, end in intervals)
                 for stage, intervals in stages.items()
@@ -192,6 +281,36 @@ def aggregate_stages(evaluation_dir, audit_dir, gold, rules):
                 ),
             }
             for stage in STAGES
+        },
+        "rechecked_point_diagnostics": {
+            "available_positive_points": counts["audit_available_positive_points"],
+            "nonexclusive_point_counts": {
+                key: recheck_flags[key] for key in RECHECK_FLAGS
+            },
+            "scope": "Each generic flag counts a known positive point at most once across nearby rechecked candidates and actually evaluated rules; flags are nonexclusive and may coexist. Core/context/exception values describe candidate confirmation, not VLM false negatives or legal/category correctness. Context/exception flags require all core predicates observed for that candidate/rule. Actual outcomes come from engine diagnostics; not_targeted rules are excluded.",
+        },
+        "audit_quality_positive_files": {
+            **{
+                key: audit_quality[key]
+                for key in (
+                    "analysis_complete_files",
+                    "analysis_partial_files",
+                    "analysis_failed_files",
+                    "coverage_complete_files",
+                    "coverage_incomplete_files",
+                )
+            },
+            **{
+                name + suffix: audit_quality[name + suffix]
+                for name in ("invalid_screen_windows", "empty_screen_windows")
+                for suffix in (
+                    "_diagnostic_available_files",
+                    "_diagnostic_missing_files",
+                    "_total",
+                    "_nonzero_files",
+                )
+            },
+            "scope": "Valid available audits for positive files only; absent numeric window diagnostics remain missing, not zero. Audit status/coverage is separate from candidate-value and final-response outcomes.",
         },
         "adjacent_temporal_changes": dict(transitions),
         "final_binary": {
