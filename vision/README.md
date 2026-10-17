@@ -77,6 +77,17 @@ uv run forte-vision observe video.mov --profile fast --backend mlx --detector na
 RF-DETR при 5 кадр/с, MPS: Nano 44 мс/кадр, Small 60, Medium 73. Декод ролика целиком — ~1.3 с.
 На маке полный профиль в бюджет не укладывается; fast-профиль на длинных роликах — на грани.
 
+## Модель на GPU-машине
+
+`FORTE_VLM_BACKEND=openai+mlx`: запросы к модели идут на OpenAI-совместимый сервер (llama.cpp `llama-server`,
+MIT, с официальным `Qwen/Qwen3-VL-8B-Instruct-GGUF` Q4_K_M, Apache-2.0) на ноутбуке с RTX 4060 8 ГБ через
+SSH-туннель; адрес — только localhost или частная сеть. Если сервер недоступен или ответ битый, запрос сразу
+уходит локальной MLX-модели Mac, а сервер не трогаем `FORTE_VLM_RETRY_SEC` секунд. Счётчики
+`vlm_primary_calls / vlm_fallback_calls / vlm_primary_failures` — в diagnostics.
+
+Замер: ролик ~142 с, профиль fast — 65–79 с на RTX 4060 (модель 31 с на 16 запросов) против 150–250 с
+целиком на M1 Pro.
+
 ## Ограничения
 
 - Короткие действия руками дают слабое движение на фоне ходьбы людей; зона стола и детектор частично
