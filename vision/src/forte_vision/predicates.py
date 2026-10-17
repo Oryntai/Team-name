@@ -19,6 +19,18 @@ PREDICATES: dict[str, str] = {
     "client_absent_during_counting": "While the cashier counts banknotes, no client is present at the client side of the desk.",
     "cashier_left_workstation": "The cashier walks away from the workstation and leaves the visible cash area.",
     "departure_before_client_service_completed": "The cashier leaves the workstation while a client is still being served (client still present, operation not finished).",
+    # Рабочее место и помещение (rules/cash_workplace.json). Формулировки — по разметке открытой выборки:
+    # в чистых роликах кассир тоже уходит, но сначала убирает ценности и блокирует ноутбук.
+    "cashier_absent_from_room": "The cashier walks out of the room through the door, or the cashier is no longer in the room in the later frames.",
+    "workstation_left_unsecured": "While the cashier is away from the desk, banknotes, a cash bundle, a cash bag or documents are still lying on the desk, or the laptop screen still shows a working application (table/form) instead of a lock screen or closed lid.",
+    "cash_room_door_left_open": "The door of the cash room stays open (door leaf turned inward/outward, corridor visible through the doorway) for several seconds while the cashier works, not only while someone is walking through it.",
+    "outsider_in_cash_room": "A second visitor enters the cash room while another client is being served, or a person stands in the doorway or next to the cash desk watching the cashier, without handing over cash, documents or a cash bag.",
+    "safe_left_open": "The safe door is open while the cashier is seated at the desk or doing other work, i.e. not at the moment of putting items into or taking items out of the safe.",
+    "previous_client_cash_on_desk": "Banknotes that belong to an earlier client remain on the open desk while the next client is served, or banknotes of two different clients are put together into one stack.",
+    "client_left_before_count_done": "The client stands up or walks away while the cashier is still counting the client's banknotes or has not yet counted them.",
+    "collection_bag_accepted_without_checks": "A cash collector hands a cash bag to the cashier and leaves right away, with no document shown or signed and without the cashier inspecting the bag and its seal.",
+    "personal_items_on_desk": "A handbag, backpack, jacket or other clothing is placed on the cashier's desk.",
+    "food_or_drink_at_desk": "A cup, glass, bottle, can or food is on the cashier's desk, or the cashier eats or drinks at the desk.",
 }
 
 VISIBILITY: dict[str, str] = {
@@ -38,6 +50,8 @@ SCREEN_CATEGORIES: dict[str, str] = {
     "door_open": "the door of the cash room is open or opened",
     "food_or_drink": "someone eats or drinks at the workstation",
     "personal_items": "a bag, phone or clothing is placed on the workstation",
+    "valuables_left_on_desk": "cash, a cash bag or documents stay on the desk while the cashier is away",
+    "client_leaves": "a client stands up or walks away from the desk",
     "other_suspicious": "any other action with cash, documents or valuables that looks irregular",
 }
 

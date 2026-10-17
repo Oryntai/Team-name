@@ -267,7 +267,7 @@ def analyze_video(
             question = ROLE_HINT + q_pred
         else:
             frames_for_vlm = frames
-        ans = backend.ask(frames_for_vlm, question, max_tokens=220)
+        ans = backend.ask(frames_for_vlm, question, max_tokens=480)
         tri = predicates.parse_tri_state(ans.text, names_p + names_v)
         rechecked[id(c)] = ({n: tri[n] for n in names_p}, {n: tri[n] for n in names_v}, [t for t, _ in frames])
     mark("recheck", t0)

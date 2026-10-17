@@ -132,3 +132,21 @@ def test_checked_screen_valid_empty_and_partial_entries():
 ])
 def test_tri_state_never_salvages_nested_after_invalid_outer(response):
     assert parse_tri_state(response,['a'])=={'a':'unclear'}
+
+
+def test_every_asked_predicate_is_used_by_default_catalogs_and_vice_versa():
+    # An observed predicate without catalog coverage makes the decision unresolved,
+    # and a catalog predicate never asked stays "unclear" forever.
+    import json
+    from pathlib import Path
+
+    from forte_vision.predicates import PREDICATES, VISIBILITY
+
+    rules_dir = Path(__file__).resolve().parents[2] / "rules"
+    used, visible = set(), set()
+    for name in ("cash_receipt.json", "cash_workplace.json"):
+        for rule in json.loads((rules_dir / name).read_text(encoding="utf-8")):
+            used.update(rule["applicability"], rule["required"], rule["exceptions"])
+            visible.update(rule["visibility_required"])
+    assert set(PREDICATES) == used
+    assert set(VISIBILITY) == visible
