@@ -28,6 +28,7 @@
           <button id="sidebar-close" class="sidebar-close icon-button" type="button" aria-label="Закрыть меню"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
         </div>
 
+        <div class="sidebar-navigation">
         <nav class="primary-nav" aria-label="Разделы">
           <span class="sidebar-label">РАБОЧИЕ РАЗДЕЛЫ</span>
           <button class="nav-item is-active" type="button" data-view="upload" aria-current="page">
@@ -42,11 +43,18 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m18 16 4-4-4-4"/><path d="m6 8-4 4 4 4"/><path d="m14.5 4-5 16"/></svg>
             <span>API</span>
           </button>
-          <button class="nav-item" type="button" data-view="help">
+          <button class="nav-item" type="button" data-view="documentation">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v16"/><path d="M16 13h2"/><path d="M16 9h2"/><path d="M20.001 19A2 2 0 0 0 22 17V5a2 2 0 0 0-1.999-2L16 3.002A5 5 0 0 0 12 5a5 5 0 0 0-4-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 1.999 2H8a5 5 0 0 1 4 2 5 5 0 0 1 4-2z"/><path d="M6 13h2"/><path d="M6 9h2"/></svg>
+            <span>Документация</span>
+          </button>
+        </nav>
+        <nav class="secondary-nav" aria-label="Помощь">
+          <button class="nav-item" type="button" data-view="help">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 0 1 5 .5c0 1.5-2.5 2-2.5 3.5"/><path d="M12 16.5h.01"/></svg>
             <span>Как это работает</span>
           </button>
         </nav>
+        </div>
 
         <div id="sidebar-resizer" class="sidebar-resizer" role="separator" tabindex="0" aria-orientation="vertical" aria-controls="app-sidebar" aria-label="Ширина боковой панели" title="Потяните, чтобы изменить ширину. Двойной щелчок — по умолчанию"></div>
 
@@ -208,6 +216,86 @@
               </article>
             </div>
 
+          </section>
+
+          <section id="documentation-view" class="view documentation-view" aria-labelledby="documentation-title" hidden>
+            <div class="view-heading">
+              <div>
+                <p class="eyebrow">РУКОВОДСТВО</p>
+                <h1 id="documentation-title" tabindex="-1">Документация</h1>
+                <p class="intro-copy">Всё для работы с проверкой: от загрузки видео до разбора эпизодов и сохранённых результатов.</p>
+              </div>
+            </div>
+            <dl class="docs-facts" aria-label="Ограничения проверки">
+              <div><dt>Формат видео</dt><dd>MOV</dd></div>
+              <div><dt>Размер файла</dt><dd>До 50 МБ</dd></div>
+              <div><dt>Лимит проверки</dt><dd>5 минут</dd></div>
+            </dl>
+            <div class="docs-layout">
+              <nav class="docs-toc" aria-label="Содержание документации">
+                <p class="eyebrow">НА ЭТОЙ СТРАНИЦЕ</p>
+                <button type="button" data-docs-section="docs-start" aria-controls="docs-start">Первая проверка</button>
+                <button type="button" data-docs-section="docs-result" aria-controls="docs-result">Как читать результат</button>
+                <button type="button" data-docs-section="docs-history" aria-controls="docs-history">История и данные</button>
+                <button type="button" data-docs-section="docs-problems" aria-controls="docs-problems">Решение проблем</button>
+                <button type="button" data-docs-section="docs-controls" aria-controls="docs-controls">Управление плеером</button>
+                <button type="button" data-docs-section="docs-api" aria-controls="docs-api">Интеграция через API</button>
+              </nav>
+              <div class="docs-content">
+                <section class="docs-section" aria-labelledby="docs-start">
+                  <h2 id="docs-start" tabindex="-1"><span class="docs-number" aria-hidden="true">01</span>Первая проверка</h2>
+                  <ol class="docs-steps">
+                    <li><strong>Выберите запись.</strong> Откройте «Проверка видео» и перетащите один MOV-файл до 50 МБ в область загрузки или нажмите «Выбрать видео».</li>
+                    <li><strong>Запустите анализ.</strong> Проверьте имя файла и нажмите «Начать проверку». Процент показывает передачу файла; затем сервис переходит к анализу.</li>
+                    <li><strong>Дождитесь результата.</strong> Общий лимит — 5 минут, включая загрузку, очередь и анализ. Это предельное время, а не обещание завершить любую запись.</li>
+                  </ol>
+                  <p>Оставьте страницу открытой до завершения. Можно переходить между разделами внутри сервиса: проверка продолжится. После перезагрузки страницы автоматическое восстановление текущей проверки не предусмотрено.</p>
+                  <button class="text-button docs-action" type="button" data-navigate="upload">Перейти к проверке <span aria-hidden="true">→</span></button>
+                </section>
+                <section class="docs-section" aria-labelledby="docs-result">
+                  <h2 id="docs-result" tabindex="-1"><span class="docs-number" aria-hidden="true">02</span>Как читать результат</h2>
+                  <p>Выберите эпизод в списке или на шкале плеера. В разборе появятся тип события, таймкод, описание и от одного до трёх кадров из исходной записи. Нажмите на кадр, чтобы увеличить его.</p>
+                  <p>Сопоставьте кадры с видео до и после отметки. Нормативное основание, пункт и ссылка на источник показываются, если они доступны для эпизода. Автоматическая отметка помогает специалисту провести проверку; окончательное решение требует оценки контекста.</p>
+                  <dl class="docs-outcomes">
+                    <div><dt>Есть отмеченные эпизоды</dt><dd>Изучите каждое событие и подтверждающие кадры. Само наличие отметки ещё не подтверждает нарушение.</dd></div>
+                    <div><dt>Нарушения не выявлены</dt><dd>Анализ завершён без находок в рамках выполненных проверок. Это не гарантия соблюдения всех возможных норм.</dd></div>
+                    <div><dt>Проверка не завершена</dt><dd>Возникла ошибка или истёк лимит времени. Такой результат нельзя считать отсутствием нарушений.</dd></div>
+                  </dl>
+                </section>
+                <section class="docs-section" aria-labelledby="docs-history">
+                  <h2 id="docs-history" tabindex="-1"><span class="docs-number" aria-hidden="true">03</span>История и данные</h2>
+                  <p>Если хранение данных в браузере доступно, в разделе «Результаты» сохраняются до 50 завершённых проверок: сведения о файле, ответ сервиса и кадры. На другом устройстве или в другом браузере эта история недоступна.</p>
+                  <p>Исходное видео в историю не сохраняется. После перезагрузки страницы сохранённую проверку можно изучить по кадрам и описаниям, без воспроизведения исходного ролика. Если браузер запрещает сохранение данных, история доступна только в текущем сеансе.</p>
+                  <div class="docs-note"><strong>Где обрабатывается видео</strong><p>Файл передаётся серверу команды для анализа. Удаление записи из истории очищает данные в этом браузере, но не удаляет загруженный файл или результат на сервере.</p></div>
+                </section>
+                <section class="docs-section" aria-labelledby="docs-problems">
+                  <h2 id="docs-problems" tabindex="-1"><span class="docs-number" aria-hidden="true">04</span>Решение проблем</h2>
+                  <div class="docs-faq">
+                    <details><summary>Файл не принимается</summary><p>Проверьте формат MOV, размер до 50 МБ и то, что файл не пустой. Простое переименование расширения не меняет формат видео. Повреждённая запись может пройти загрузку, но завершиться ошибкой при анализе.</p></details>
+                    <details><summary>Пропало соединение</summary><p>Восстановите сеть. Если появилась кнопка «Продолжить проверку», нажмите её: сервис повторит запрос статуса уже загруженного задания. Не перезагружайте страницу, чтобы сохранить возможность продолжить опрос.</p></details>
+                    <details><summary>Истекло время или модель недоступна</summary><p>Это незавершённая проверка. Повторите попытку, когда сервис будет доступен; если ошибка повторяется, передайте команде текст ошибки, время запуска и размер файла.</p></details>
+                    <details><summary>Видео не воспроизводится в браузере</summary><p>Браузер может не поддерживать кодек внутри MOV. Если анализ завершён, изучите эпизоды по кадрам-доказательствам. У сохранённой записи из истории исходное видео также может отсутствовать.</p></details>
+                    <details><summary>Пропала история проверок</summary><p>Убедитесь, что открыт тот же сайт в том же браузере и профиле. Очистка данных сайта, приватный режим или запрет хранения могут сделать прежние результаты недоступными.</p></details>
+                  </div>
+                </section>
+                <section class="docs-section" aria-labelledby="docs-controls">
+                  <h2 id="docs-controls" tabindex="-1"><span class="docs-number" aria-hidden="true">05</span>Управление плеером</h2>
+                  <p>Плеер доступен, пока исходное видео открыто в текущем сеансе. Можно выбрать скорость от 0,25× до 2× и перейти к нужному эпизоду по метке на шкале. Горячие клавиши работают, когда фокус находится внутри плеера. Если фокус на кнопке, пробел нажимает эту кнопку.</p>
+                  <dl class="docs-shortcuts">
+                    <div><dt><kbd>Пробел</kbd> / <kbd>K</kbd></dt><dd>Воспроизведение и пауза</dd></div>
+                    <div><dt><kbd>←</kbd> / <kbd>→</kbd></dt><dd>Назад или вперёд на 1 секунду; с <kbd>Shift</kbd> — на 5 секунд</dd></div>
+                    <div><dt><kbd>[</kbd> / <kbd>]</kbd></dt><dd>Предыдущий или следующий эпизод</dd></div>
+                    <div><dt><kbd>F</kbd></dt><dd>Полный экран</dd></div>
+                  </dl>
+                  <p>На широком экране боковую панель можно свернуть кнопкой в её верхней части или сочетанием <kbd>Ctrl</kbd> / <kbd>⌘</kbd> + <kbd>B</kbd>. Потяните за правую границу панели, чтобы изменить ширину.</p>
+                </section>
+                <section class="docs-section" aria-labelledby="docs-api">
+                  <h2 id="docs-api" tabindex="-1"><span class="docs-number" aria-hidden="true">06</span>Интеграция через API</h2>
+                  <p>Для программной загрузки видео и получения результата откройте раздел API. Там находятся адрес сервиса, данные для подключения, примеры запросов, форматы ответов и коды ошибок.</p>
+                  <button class="button button-secondary" type="button" data-navigate="api">Открыть API <span aria-hidden="true">→</span></button>
+                </section>
+              </div>
+            </div>
           </section>
 
           <section id="help-view" class="view information-view" aria-labelledby="help-title" hidden>

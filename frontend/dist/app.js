@@ -73,6 +73,7 @@ import { NORMS } from "./norms.js";
     sourceLinkWrap: $("#source-link-wrap"),
     sourceLink: $("#source-link"),
     emptyResult: $("#empty-result"),
+    documentationView: $("#documentation-view"),
     helpView: $("#help-view"),
     apiView: $("#api-view"),
     failureView: $("#failure-view"),
@@ -102,6 +103,7 @@ import { NORMS } from "./norms.js";
     processing: elements.processingView,
     result: elements.resultView,
     history: elements.historyView,
+    documentation: elements.documentationView,
     help: elements.helpView,
     api: elements.apiView,
     failure: elements.failureView,
@@ -112,6 +114,7 @@ import { NORMS } from "./norms.js";
     processing: "Обработка видео",
     result: "Результат проверки",
     history: "Результаты",
+    documentation: "Документация",
     help: "Как это работает",
     api: "API",
     failure: "Проверка не завершена",
@@ -166,11 +169,13 @@ import { NORMS } from "./norms.js";
       processing: $("#processing-title"),
       result: $("#result-title"),
       history: $("#history-title"),
+      documentation: $("#documentation-title"),
       help: $("#help-title"),
       api: $("#api-title"),
       failure: $("#failure-title"),
     };
     headings[view]?.focus({ preventScroll: true });
+    window.scrollTo({ top: 0, behavior: "instant" });
   }
 
   function formatSize(bytes) {
@@ -926,17 +931,23 @@ import { NORMS } from "./norms.js";
   elements.sidebarToggle.addEventListener("click", () => setSidebarOpen(true));
   elements.sidebarClose.addEventListener("click", () => setSidebarOpen(false));
   elements.sidebarBackdrop.addEventListener("click", () => setSidebarOpen(false));
-  elements.navItems.forEach((button) => button.addEventListener("click", () => {
-    const view = button.dataset.view;
+  function navigateTo(view) {
+    setSidebarOpen(false);
     if (state.busy && view === "upload") {
       showView("processing");
-      setSidebarOpen(false);
       return;
     }
     if (view === "upload" && state.result) resetToUpload();
     else if (view === "history") showHistory();
     else showView(view);
-    setSidebarOpen(false);
+  }
+
+  elements.navItems.forEach((button) => button.addEventListener("click", () => navigateTo(button.dataset.view)));
+  $$("[data-navigate]").forEach((button) => button.addEventListener("click", () => navigateTo(button.dataset.navigate)));
+  $$("[data-docs-section]").forEach((button) => button.addEventListener("click", () => {
+    const heading = document.getElementById(button.dataset.docsSection);
+    heading?.focus({ preventScroll: true });
+    heading?.scrollIntoView({ block: "start", behavior: "instant" });
   }));
   window.addEventListener("keydown", (event) => {
     if (!document.body.classList.contains("sidebar-open")) return;
