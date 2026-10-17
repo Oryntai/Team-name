@@ -30,6 +30,20 @@ class WorkerAlreadyRunning(RuntimeError):
     pass
 
 
+class CatalogMismatch(ValueError):
+    """The analyzer reports predicates no rule requires: such findings could never become violations."""
+
+
+def _check_catalog_coverage(analyzer: Any, rules: Any) -> None:
+    emitted = getattr(analyzer, "emitted_predicates", None)
+    covered = getattr(rules, "covered_predicates", None)
+    if emitted is None or covered is None:
+        return
+    missing = sorted(set(emitted()) - set(covered()))
+    if missing:
+        raise CatalogMismatch("rule catalog does not cover analyzer predicates: " + ", ".join(missing))
+
+
 class SingletonLock:
     """An OS lock, automatically released after a crash; a PID file is insufficient."""
 
@@ -276,7 +290,10 @@ def _model_main(connection, config: dict, parent_pid: int) -> None:
     try:
         analyzer = _factory(config["analyzer_factory"])
         rules = _factory(config["rules_factory"])
+        # A wrong FORTE_RULE_CATALOGS would otherwise turn every finding into failed while /health/ready is green.
+        _check_catalog_coverage(analyzer, rules)
     except BaseException as error:
+        print(f"forte-model-owner: startup failed: {type(error).__name__}: {error}", file=sys.stderr, flush=True)
         connection.send({"kind": "startup_failed", "diagnostics": {"error_type": type(error).__name__}})
         connection.close()
         return

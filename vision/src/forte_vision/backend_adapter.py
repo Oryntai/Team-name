@@ -192,6 +192,12 @@ class VisionAnalyzer:
         self.reserve = float(os.environ.get("FORTE_VISION_RESERVE_SEC", "20"))
         _service_profile(None)  # неверный FORTE_VISION_PROFILE — ошибка при старте, а не на первом ролике
 
+    def emitted_predicates(self) -> set[str]:
+        """Predicates the service (timeline) profiles can report as observed; the worker checks the catalog."""
+        from .timeline import CHECKS
+
+        return set(CHECKS.values())
+
     def analyze(self, context, video):
         from backend.contracts import (
             IncompleteAnalysis,

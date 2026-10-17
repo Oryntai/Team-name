@@ -421,6 +421,8 @@ def _fit_size(width: int, height: int, max_side: int) -> tuple[int, int] | None:
 
 TIMELINE_BUDGET_SHARE = 0.6  # доля бюджета задания на проход таймлайна
 TIMELINE_MAX_TOKENS = 400
+TIMELINE_RETRY_HINT = ("\nYour previous answer was not a JSON list. Answer again with ONLY the JSON list, "
+                       "starting with [ and ending with ].")
 
 
 def _timeline_windows(dur: float, prof: Profile) -> list[tuple[float, float]]:
@@ -445,7 +447,7 @@ def _analyze_timeline(vid, src, info, backend, prof, deadline, timings, t_start,
     steps: list[tuple[float, str]] = []
     pts_pool: list[float] = []
     gaps: list[tuple[float, float]] = []  # окна без валидного ответа (битый ответ, нет кадров, сбой VLM, дедлайн)
-    covered = invalid = dropped = errors = 0
+    covered = invalid = dropped = errors = retries = 0
     for ws, we in windows:
         # вызов, который не успеет до дедлайна, не начинаем: он съест резерв и убьёт всё задание
         if time.monotonic() + expected_call_sec(backend) > deadline:
@@ -466,6 +468,14 @@ def _analyze_timeline(vid, src, info, backend, prof, deadline, timings, t_start,
             gaps.append((ws, we))
             continue
         parsed, ok, n_dropped = timeline.parse_timeline(ans.text, ws, we)
+        # не-JSON ответ (проза, обрезка) — один перезапрос с жёсткой подсказкой, если успеваем
+        if not ok and time.monotonic() + expected_call_sec(backend) <= deadline:
+            retries += 1
+            try:
+                ans = backend.ask(frames, question + TIMELINE_RETRY_HINT, max_tokens=TIMELINE_MAX_TOKENS)
+                parsed, ok, n_dropped = timeline.parse_timeline(ans.text, ws, we)
+            except Exception:
+                errors += 1
         dropped += n_dropped
         if not ok:
             invalid += 1
@@ -577,6 +587,7 @@ def _analyze_timeline(vid, src, info, backend, prof, deadline, timings, t_start,
         "timeline_covered_windows": covered,
         "timeline_invalid_windows": invalid,
         "timeline_vlm_errors": errors,
+        "timeline_retries": retries,
         "timeline_gaps": [[round(a, 3), round(b, 3)] for a, b in gaps],
         "timeline_dropped_items": dropped,
         "timeline_steps": [[round(t, 2), e] for t, e in sorted(steps)],

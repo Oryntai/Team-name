@@ -441,3 +441,34 @@ def test_jury_burst_gets_shared_budgets_and_the_last_job_the_rest(worker_setting
         assert 30.0 <= budgets[0] < 100 and 30.0 <= budgets[1] < 150
         assert budgets[2] is None
 
+
+class _UncoveredAnalyzer(SyntheticAnalyzer):
+    def emitted_predicates(self):
+        return {"synthetic", "not_in_any_rule"}
+
+
+class _CoveringRules(SyntheticRules):
+    def covered_predicates(self):
+        return {"synthetic"}
+
+
+def create_uncovered_analyzer():
+    return _UncoveredAnalyzer()
+
+
+def create_covering_rules():
+    return _CoveringRules()
+
+
+def test_model_refuses_to_start_when_the_catalog_misses_analyzer_predicates(worker_settings, synthetic_video):
+    """A wrong FORTE_RULE_CATALOGS must make the model not ready, not silently fail every violation."""
+    settings = worker_settings.model_copy(update={
+        "analyzer_factory": "backend.tests.test_worker_store:create_uncovered_analyzer",
+        "rules_factory": "backend.tests.test_worker_store:create_covering_rules"})
+    with Supervisor(settings) as supervisor:
+        _enqueue(supervisor.store, "mismatch", synthetic_video, profile="violation")
+        [job] = _drain(supervisor, ["mismatch"])
+        assert job["status"] == "failed" and job["error_code"] == "model_startup_failed"
+        assert job["diagnostics"] == {"error_type": "CatalogMismatch"}
+        assert supervisor.store.health()["model_ready"] is False
+

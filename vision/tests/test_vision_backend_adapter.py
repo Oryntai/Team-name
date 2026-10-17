@@ -314,3 +314,32 @@ def test_timeline_windows_shrink_to_fit_a_slow_model(synthetic_video):
     assert diag["timeline_windows"] == 2 and diag["timeline_call_estimate_sec"] == 50.0
     assert obs["coverage_complete"]
 
+
+def test_default_catalog_covers_service_predicates_and_seed_catalog_does_not(monkeypatch):
+    """The live worker once ran with cash_receipt.json: every timeline finding became failed."""
+    from pathlib import Path
+
+    from backend.worker import CatalogMismatch, _check_catalog_coverage
+    from forte_decision.backend_adapter import BackendRules
+
+    rules_dir = Path(__file__).resolve().parents[2] / "rules"
+    analyzer = backend_adapter.VisionAnalyzer.__new__(backend_adapter.VisionAnalyzer)
+    _check_catalog_coverage(analyzer, BackendRules([rules_dir / "cash_checks.json"]))
+    with pytest.raises(CatalogMismatch):
+        _check_catalog_coverage(analyzer, BackendRules([rules_dir / "cash_receipt.json"]))
+
+
+def test_prose_instead_of_json_is_asked_again_once(synthetic_video):
+    from forte_vision.observer import TIMELINE_RETRY_HINT, analyze_video
+
+    def respond(times, question):
+        if question.startswith("List every step") and not question.endswith(TIMELINE_RETRY_HINT):
+            if any(8.0 <= t <= 10.0 for t in times):
+                return "Sure! In these frames the cashier puts a bag on the desk."
+        return _timeline_respond(times, question)
+
+    obs, diag = analyze_video(synthetic_video, StubBackend(respond), video_id="retry", profile="fast")
+    assert diag["timeline_retries"] == 1 and diag["timeline_invalid_windows"] == 0
+    assert obs["coverage_complete"]
+    assert any(c["predicates"]["personal_items_on_desk"] == "observed" for c in obs["candidates"])
+

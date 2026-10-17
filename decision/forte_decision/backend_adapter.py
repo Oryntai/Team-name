@@ -59,6 +59,10 @@ class BackendRules:
             max_anchor_delta_sec=max_anchor_delta_sec,
         )
 
+    def covered_predicates(self) -> set[str]:
+        """Predicates some rule requires: only these can become a violation."""
+        return {name for rule in self.rules for name in rule.required}
+
     def evaluate(
         self, observations: ObservationBatch, context: AnalysisContext
     ) -> list[RuleEvent]:
