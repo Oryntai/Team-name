@@ -169,3 +169,103 @@ def test_source_grab_rejects_invalid_times(synthetic_video, value):
     )
     with pytest.raises(ValueError):
         source.grab_at([value])
+
+
+@pytest.mark.parametrize(
+    "duration,span",
+    [
+        (1.23456, (0.0, 1.2, 1.235)),
+        (1.23456, (1.235, 1.235, 1.235)),
+        (1.2345, (0.0, 1.2, round(1.2345, 3))),
+        (1.2344, (0.0, 1.2, round(1.2344, 3))),
+    ],
+)
+def test_rounded_observer_boundary_passes_exact_worker_guard(
+    tmp_path, monkeypatch, duration, span
+):
+    """No media/model: the real worker validates the actual canonical batch."""
+    from types import SimpleNamespace
+    import backend.video_io as video_module
+    from backend.worker import _analyze_job
+    from forte_decision.backend_adapter import create_rules
+    from forte_vision.predicates import PREDICATES
+
+    canonical = (0.0, 0.6, duration - 0.00001)
+
+    class CachedSyntheticVideo:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def probe(self):
+            return SimpleNamespace(
+                duration_sec=duration, frame_pts=canonical, width=16, height=16
+            )
+
+        def validate(self):
+            return self.probe()
+
+        def frame_at(self, *args):
+            raise AssertionError("clean synthetic result needs no extraction")
+
+    start, main, end = span
+    observation = {
+        "video_id": "synthetic",
+        "duration_sec": round(duration, 3),
+        "analysis_status": "complete",
+        "coverage_complete": True,
+        "candidates": [
+            {
+                "candidate_id": "c0",
+                "start_sec": start,
+                "end_sec": end,
+                "main_sec": main,
+                "source": "motion",
+                "evidence": [
+                    {
+                        "frame_id": "f",
+                        "pts_sec": round(canonical[-1], 3),
+                        "source": "synthetic",
+                    }
+                ],
+                "predicates": {name: "not_observed" for name in PREDICATES},
+                "visibility": {},
+            }
+        ],
+    }
+    from forte_vision.contract import validate_observation
+    validate_observation(observation)
+    monkeypatch.setattr(video_module, "VideoIO", CachedSyntheticVideo)
+    monkeypatch.setattr(
+        backend_adapter, "analyze_video", lambda *args, **kwargs: (observation, {})
+    )
+    monkeypatch.delenv("FORTE_RULE_CATALOGS", raising=False)
+    analyzer = backend_adapter.VisionAnalyzer.__new__(backend_adapter.VisionAnalyzer)
+    analyzer.backend, analyzer.detector, analyzer.reserve = object(), None, 0.0
+    context = contracts.AnalysisContext(
+        job_id="synthetic",
+        video_path=tmp_path / "unused.mov",
+        deadline_at=time.time() + 30,
+    )
+    batch = analyzer.analyze(context, CachedSyntheticVideo())
+    event = batch.events[0]
+    assert 0 <= event.t_start <= event.t_main <= event.t_end <= duration
+    assert event.frame_pts == [canonical[-1]]
+    assert event.t_start <= canonical[-1] <= event.t_end
+    result = _analyze_job(
+        {
+            "job_id": "synthetic",
+            "video_path": context.video_path,
+            "deadline_at": context.deadline_at,
+            "profile": "synthetic",
+        },
+        {"ffmpeg_bin": "unused", "ffprobe_bin": "unused"},
+        analyzer,
+        create_rules(),
+    )
+    assert result["status"] == "done" and result["verdict"] == "no_violation"
+
+
+@pytest.mark.parametrize("value", [1.2351, 1.3, 1.2347])
+def test_observer_boundary_rejects_genuine_or_nonrounded_overshoot(value):
+    with pytest.raises(ValueError):
+        backend_adapter._bounded_observer_time(value, 1.23456)

@@ -26,6 +26,24 @@ from .video import VideoInfo
 VALID_SOURCES = {"vlm", "motion", "detector"}
 
 
+def _bounded_observer_time(value: float, duration: float) -> float:
+    """Repair only the observer's known 3-decimal rounding at the video end."""
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value < 0
+    ):
+        raise ValueError("invalid observer timestamp")
+    if value <= duration:
+        return value
+    # Observer times are rounded to milliseconds. A legitimate end overshoot
+    # must equal rounded actual duration, not merely be an arbitrary small excess.
+    if value != round(duration, 3) or value - duration > 0.0005 + 1e-9:
+        raise ValueError("observer timestamp exceeds actual video duration")
+    return duration
+
+
 class VideoIOSource:
     """Canonical VideoIO JPEG pixels and PTS; resizing affects inference copies only."""
 
@@ -186,12 +204,16 @@ class VisionAnalyzer:
             # Observation округляет время до мс; в batch — точные значения из frame_pts VideoIO,
             # интервал расширяется до них, чтобы кадр на границе не выпал из события
             pts = sorted({src.snap(e["pts_sec"]) for e in c["evidence"]})
-            t_start, t_end = min(c["start_sec"], pts[0]), max(c["end_sec"], pts[-1])
+            duration = src.info.duration_sec
+            start = _bounded_observer_time(c["start_sec"], duration)
+            end = _bounded_observer_time(c["end_sec"], duration)
+            main = _bounded_observer_time(c["main_sec"], duration)
+            t_start, t_end = min(start, pts[0]), max(end, pts[-1])
             events.append(
                 ObservedEvent(
                     t_start=t_start,
                     t_end=t_end,
-                    t_main=min(max(c["main_sec"], t_start), t_end),
+                    t_main=min(max(main, t_start), t_end),
                     frame_pts=pts,
                     # именованные tri-state видимости — под своими именами рядом с предикатами;
                     # поле visibility (clear/partial/unusable) — другое утверждение, его не заполняем
