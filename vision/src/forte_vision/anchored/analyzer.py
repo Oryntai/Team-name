@@ -115,19 +115,12 @@ class AnchoredAnalyzer:
         # 5) вопросы по вырезкам: сначала события, потом обход; не успели — не спрашиваем
         door = decide.door_state_fn(scan, zones, people)
         probes = decide.plan(people, zones, dur, known_predicates=self.known, door_open=door, blobs=blobs)
-        event_probes = [p for p in probes if p.reason != "обход по ролику"]
-        event_items = decide.all_items(event_probes)
+        event_items = decide.all_items([p for p in probes if p.reason != "обход по ролику"])
         sweep_items = decide.all_items([p for p in probes if p.reason == "обход по ролику"])
         answers: dict[str, CropAnswer] = {}
         asked = 0
         ctx = _context_text(people)
         batch_sec = 8.0  # сколько идёт пачка вопросов; уточняется по факту
-        # времени на все пачки по событиям не хватит (залп, доля ролика короткая) — спрашиваем парами от каждой
-        # проверки по кругу: подтверждение — два «да», и первая же пачка тогда закрывает четыре проверки, а не
-        # целиком самые ранние события (в залпе из 8 X-4 терял смену клиентов на 58 с). Времени хватает — порядок прежний.
-        if len(event_items) > 8 and share_end() - time.monotonic() < (len(event_items) + 7) // 8 * batch_sec + 12.0:
-            event_items = _pairs_round_robin(event_probes)
-            timings["ask_order"] = "pairs"
         for i, batch in enumerate(_chunks(event_items, 8) + _chunks(sweep_items, 8)):
             # первая пачка ограничена только жёстким сроком: без неё ролик остался бы без вердикта;
             # дальше пачку начинаем, только если она успеет закончиться в доле ролика (иначе перерасход
@@ -261,22 +254,6 @@ def _forget(asker) -> None:
 
 def _chunks(xs, n):
     return [xs[i:i + n] for i in range(0, len(xs), n)]
-
-
-def _pairs_round_robin(probes) -> list:
-    """Вырезки по кругу парами: два кадра первой проверки, два — второй, ... затем следующие пары. Повторы ключей
-    (LEAVE и BAG читают одни вырезки) пропускаются; запреты (veto) идут в конце пары своей проверки."""
-    seen, out = set(), []
-    lists = [list(p.items) + list(p.veto) for p in probes]
-    k = 0
-    while any(k < len(xs) for xs in lists):
-        for xs in lists:
-            for it in xs[k:k + 2]:
-                if it.key not in seen:
-                    seen.add(it.key)
-                    out.append(it)
-        k += 2
-    return out
 
 
 def _context_text(people) -> str:
