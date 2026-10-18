@@ -13,9 +13,9 @@
   &nbsp;·&nbsp; <a href="docs/sources.md">Источники норм</a>
 </p>
 
-<p align="center"><a href="docs/media/forte.mp4"><picture><source srcset="docs/media/forte.webp" type="image/webp"><img src="docs/media/forte.gif" width="900" alt="Промо-ролик: сервис останавливает запись на секунде нарушения, называет тип и пункт нормы. Нажмите, чтобы открыть полную версию со звуком."></picture></a></p>
+https://github.com/user-attachments/assets/33557117-c3f4-4a4b-9df0-3afdf6c94e56
 
-<p align="center"><sub>Промо, 32 с — <a href="docs/media/forte.mp4">полная версия 1080p со звуком (MP4)</a>. Кадры — ролики открытого набора организаторов.</sub></p>
+<p align="center"><sub>Промо, 32 с — если плеер не появился: <a href="docs/media/forte.mp4">MP4 1080p со звуком</a>. Кадры — ролики открытого набора организаторов.</sub></p>
 
 **По каждой находке:** тип · таймкод · 1–3 настоящих кадра файла (JPEG) · «Что видно» · пункт акта РК с цитатой и ссылкой на adilet.zan.kz.
 Модели — Qwen3-VL-8B и RF-DETR nano на своих машинах, лицензии Apache-2.0 / MIT. Лица не распознаются, звук не читается.
