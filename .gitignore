@@ -34,3 +34,13 @@ local_data/
 data/raw/
 data/private/
 *.MOV
+*.MP4
+# README demo videos are the one allowed exception
+!docs/media/*.mp4
+# editor and merge leftovers
+*.swp
+*~
+*.orig
+*.rej
+.idea/
+.vscode/
