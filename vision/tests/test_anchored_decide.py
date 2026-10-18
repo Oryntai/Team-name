@@ -206,3 +206,14 @@ def test_counting_on_after_the_client_left_is_a_violation_even_if_it_began_with_
     assert not nocl.veto
     answers = {it.key: CropAnswer(it.key, "yes") for it in decide.all_items(probes) if it.key.startswith("NOCL")}
     assert [f.check for f in decide.judge(probes, answers) if f.check == "NOCLIENT"] == ["NOCLIENT"]
+
+
+def test_squeezed_questions_cover_every_check_in_pairs():
+    from forte_vision.anchored.analyzer import _pairs_round_robin
+    from forte_vision.anchored.types import CropItem as CI
+    B = (0.1, 0.1, 0.3, 0.3)
+    p1 = decide.Probe("SAFE", 1.0, [CI(f"A@{t}", t, "safe", B, "q") for t in (1, 2, 3)])
+    p2 = decide.Probe("MIX", 9.0, [CI(f"M@{t}", t, "desk", B, "q") for t in (9, 10)])
+    p3 = decide.Probe("BAG", 1.0, [CI("A@1", 1, "safe", B, "q"), CI("A@2", 2, "safe", B, "q")])
+    keys = [it.key for it in _pairs_round_robin([p1, p2, p3])]
+    assert keys == ["A@1", "A@2", "M@9", "M@10", "A@3"]  # пара от каждой проверки, повторы ключей — один раз
