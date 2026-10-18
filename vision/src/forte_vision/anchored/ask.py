@@ -11,12 +11,16 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import http.client
 import io
 import ipaddress
 import json
 import os
 import re
+import tempfile
+import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Sequence
@@ -59,6 +63,81 @@ def _check_local(url: str) -> None:
         ok = host == "localhost" or host.endswith(".local")
     if not ok:
         raise ValueError(f"VLM-сервер должен быть локальным (localhost / частная сеть), а не {host!r}")
+
+
+def primary_failed(e: BaseException) -> bool:
+    """Сбой связи или кривой ответ основного сервера — повод отдать запрос запасной модели.
+    Отказ сервера по самому запросу (HTTP 4xx) — нет: запасная модель на нём споткнётся так же."""
+    if isinstance(e, urllib.error.HTTPError):
+        return e.code >= 500
+    return isinstance(e, (OSError, http.client.HTTPException, ValueError, KeyError, IndexError, TypeError))
+
+
+def _reply_text(data: dict) -> str:
+    return str(data["choices"][0]["message"]["content"] or "").strip()
+
+
+class MLXChat:
+    """Запасная модель на этом маке (mlx-vlm, MIT) с тем же входом и выходом, что у OpenAI-сервера.
+
+    Веса грузятся при первом обращении и один раз на процесс (общий кеш по model_id): на старте память
+    не занимаем. Картинки из data:-URL пишутся во временный каталог, который сразу удаляется."""
+
+    _loaded: dict = {}
+    _lock = threading.Lock()
+
+    def __init__(self, model_id: str):
+        self.model_id = model_id
+
+    def _model(self):
+        with MLXChat._lock:
+            if self.model_id not in MLXChat._loaded:
+                from mlx_vlm import generate, load
+                from mlx_vlm.prompt_utils import apply_chat_template
+
+                from ..vlm import _local_snapshot
+
+                path, _ = _local_snapshot(self.model_id)
+                model, processor = load(path)
+                MLXChat._loaded[self.model_id] = (model, processor, generate, apply_chat_template)
+            return MLXChat._loaded[self.model_id]
+
+    @staticmethod
+    def split_content(content: list) -> tuple[list[dict], list[bytes]]:
+        """Части запроса в том же порядке: текст как есть, на месте картинки — {"type": "image"};
+        картинки — байтами JPEG по порядку. Так модель видит каждую вырезку рядом с её подписью, как на сервере."""
+        parts, images = [], []
+        for part in content:
+            if part.get("type") == "text":
+                parts.append({"type": "text", "text": str(part.get("text", ""))})
+            elif part.get("type") == "image_url":
+                url = (part.get("image_url") or {}).get("url", "")
+                images.append(base64.b64decode(url.split(",", 1)[1]))
+                parts.append({"type": "image"})
+        return parts, images
+
+    def __call__(self, body: dict) -> dict:
+        content = body["messages"][0]["content"]
+        parts, images = self.split_content(content if isinstance(content, list) else [{"type": "text", "text": content}])
+        model, processor, generate, template = self._model()
+        with MLXChat._lock, tempfile.TemporaryDirectory(prefix="fv_mlx_") as d:  # MLX — по одному запросу
+            paths = []
+            for i, b in enumerate(images):
+                p = os.path.join(d, f"{i:04d}.jpg")
+                Image.open(io.BytesIO(b)).convert("RGB").save(p, quality=95)
+                paths.append(p)
+            try:  # шаблон самой модели: картинки на своих местах между текстами
+                text = processor.apply_chat_template([{"role": "user", "content": parts}],
+                                                     add_generation_prompt=True, tokenize=False)
+            except Exception:  # noqa: BLE001 — нет шаблона у процессора: тексты подряд, картинки впереди
+                prompt = "".join(x["text"] for x in parts if x["type"] == "text")
+                text = template(processor, model.config, prompt, num_images=len(paths))
+            r = generate(model, processor, text, image=paths or None, max_tokens=int(body.get("max_tokens", 128)),
+                         temperature=0.0, verbose=False)
+        return {"choices": [{"message": {"role": "assistant", "content": r.text}}],
+                "usage": {"prompt_tokens": int(getattr(r, "prompt_tokens", 0) or 0),
+                          "completion_tokens": int(getattr(r, "generation_tokens", 0) or 0)},
+                "model": "mlx:" + self.model_id}
 
 
 # ---------- кадры и вырезки ----------
@@ -338,6 +417,9 @@ class AskStats:
     wall_sec: float = 0.0
     prompt_tokens: int = 0
     gen_tokens: int = 0
+    fallback_calls: int = 0  # ответила запасная локальная модель (основной сервер недоступен)
+    primary_failures: int = 0  # сбоев основного сервера, после каждого он пропускается retry_sec
+    fallback_reason: str = ""  # последний сбой основного
     log: list = field(default_factory=list)  # (вид, вырезок, с, prompt_tokens, gen_tokens) по каждому запросу
 
 
@@ -346,7 +428,9 @@ class CropAsker:
 
     def __init__(self, url: str | None = None, key_file: str | None = None, model: str = "local",
                  cache_dir: str | None = None, timeout: float = 60,
-                 transport: Callable[[dict], dict] | None = None):
+                 transport: Callable[[dict], dict] | None = None,
+                 fallback: Callable[[dict], dict] | None = None, retry_sec: float = 30.0,
+                 clock: Callable[[], float] = time.monotonic):
         url = url or os.environ.get("FORTE_VLM_URL") or "http://127.0.0.1:18080"
         _check_local(url)
         self.url, self.model, self.timeout = _endpoint(url), model, timeout
@@ -357,6 +441,10 @@ class CropAsker:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._mem: dict[str, dict] = {}
         self._transport = transport or self._http
+        # запасная модель (MLX на этом маке): отвечает, когда основной сервер недоступен; основной после
+        # сбоя не трогаем retry_sec секунд, чтобы не ждать таймаут на каждом запросе, потом пробуем снова
+        self._fallback, self.retry_sec, self._clock = fallback, float(retry_sec), clock
+        self._down_until = 0.0
         self.stats = AskStats()
         self.last_ground: dict = {}
 
@@ -411,8 +499,8 @@ class CropAsker:
                 "max_tokens": int(max_tokens), "temperature": 0.0}
         t0 = time.perf_counter()
         try:
-            data = self._transport(body)
-            text = str(data["choices"][0]["message"]["content"] or "").strip()
+            data = self._send(body)
+            text = _reply_text(data)
             err = None
         except Exception as e:  # noqa: BLE001 — сеть/таймаут/битый ответ: вызывающий получит unclear
             text, err = "", f"{type(e).__name__}: {e}"
@@ -427,6 +515,23 @@ class CropAsker:
         self.stats.errors += err is not None
         self.stats.log.append((kind, n_items, round(wall, 2), pt, gt))
         return text, err
+
+    def _send(self, body: dict) -> dict:
+        """Основной сервер, а при его сбое (или пока он на паузе после сбоя) — запасная модель."""
+        if self._fallback is None or self._clock() >= self._down_until:
+            try:
+                data = self._transport(body)
+                _reply_text(data)  # битый ответ — тоже сбой основного
+                return data
+            except Exception as e:  # noqa: BLE001
+                if self._fallback is None or not primary_failed(e):
+                    raise
+                self.stats.primary_failures += 1
+                self.stats.fallback_reason = f"{type(e).__name__}: {e}"[:200]
+                self._down_until = self._clock() + self.retry_sec
+        data = self._fallback(body)
+        self.stats.fallback_calls += 1
+        return data
 
     # --- вопросы по вырезкам ---
     @staticmethod

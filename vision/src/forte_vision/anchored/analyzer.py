@@ -77,6 +77,8 @@ class AnchoredAnalyzer:
             return share["end"]
 
         _forget(self.asker)  # ответы по прошлому ролику в памяти процесса не держим
+        st0 = getattr(self.asker, "stats", None)
+        fb0 = (getattr(st0, "fallback_calls", 0), getattr(st0, "primary_failures", 0))
         src = VideoIOSource(video, context.video_path)
         dur = float(src.info.duration_sec)
         path = str(context.video_path)
@@ -181,6 +183,7 @@ class AnchoredAnalyzer:
             "desk_objects": _objects_text(blobs, probes, answers)[:400],
             "vlm_errors": sum(1 for a in answers.values() if _failed(a)),
             "vlm_ground_error": str(zones.diag.get("error") or "")[:200],
+            **_fallback_diag(self.asker, fb0),
             **timings,
         }
         return ObservationBatch(complete=complete, events=events if complete else [], diagnostics=diag)
@@ -246,6 +249,16 @@ def trustworthy(found, event_items, answers: dict[str, CropAnswer], zones) -> bo
     return sum(_failed(a) for a in asked) < 0.5 * len(asked) if asked else True
 
 
+def _fallback_diag(asker, before: tuple[int, int]) -> dict:
+    """Сколько запросов этого ролика ответила запасная локальная модель и сколько раз падал основной сервер."""
+    st = getattr(asker, "stats", None)
+    if st is None or getattr(asker, "_fallback", None) is None:
+        return {}
+    return {"vlm_fallback_calls": int(getattr(st, "fallback_calls", 0)) - before[0],
+            "vlm_primary_failures": int(getattr(st, "primary_failures", 0)) - before[1],
+            "vlm_fallback_reason": str(getattr(st, "fallback_reason", ""))[:200]}
+
+
 def _forget(asker) -> None:
     mem = getattr(asker, "_mem", None)
     if isinstance(mem, dict):
@@ -270,13 +283,17 @@ def _context_text(people) -> str:
 
 
 def create_analyzer():
-    from .ask import CropAsker
+    from .ask import CropAsker, MLXChat
     from .detect import make_detector
 
     url = os.environ.get("FORTE_VLM_URL", "http://127.0.0.1:18080")
     key = os.environ.get("FORTE_VLM_KEY_FILE")
     cache = os.environ.get("FORTE_ANCHORED_CACHE")  # только для офлайн-оценки; в проде пусто
+    # запасная локальная MLX-модель на случай недоступного сервера модели; веса грузятся при первом сбое
+    fb_model = os.environ.get("FORTE_VLM_FALLBACK_MODEL", "").strip()
     asker = CropAsker(url=url, key_file=key, model=os.environ.get("FORTE_VLM_MODEL", "local"), cache_dir=cache,
-                      timeout=float(os.environ.get("FORTE_VLM_TIMEOUT", "45")))
+                      timeout=float(os.environ.get("FORTE_VLM_TIMEOUT", "45")),
+                      fallback=MLXChat(fb_model) if fb_model else None,
+                      retry_sec=float(os.environ.get("FORTE_VLM_RETRY_SEC", "30")))
     return AnchoredAnalyzer(make_detector(os.environ.get("FORTE_DETECTOR", "nano")), asker,
                             reserve_sec=float(os.environ.get("FORTE_VISION_RESERVE_SEC", "20")))
