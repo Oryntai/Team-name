@@ -10,13 +10,14 @@ X-47/X-48 — побайтные копии X-4/X-5, пропускаются.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
 
 VIDEOS = Path("/Users/oryntajpazylbekov/projects/datathon/data/raw/open/videos")
-CACHE = Path("/private/tmp/claude-501/-Users-oryntajpazylbekov-projects-datathon/"
-             "ab6194b6-74ce-40d8-bc40-8ba5689bbe14/scratchpad/anchored_cache/scans")
+CACHE = Path(os.environ.get("FORTE_PEOPLE_SCANS", "/private/tmp/claude-501/-Users-oryntajpazylbekov-projects-datathon/"
+                                                   "ab6194b6-74ce-40d8-bc40-8ba5689bbe14/scratchpad/anchored_cache/scans"))
 SKIP = {"X-47", "X-48"}
 
 # кассир: "leave" — (момент ухода с рабочего места, выход в дверь (a, b)); "enter" — вход в дверь (a, b)
@@ -59,9 +60,11 @@ def cmd_scan(a):
     print(f"итого {tot_v:.0f}s видео за {tot_w:.0f}s ({tot_w / max(tot_v, 1):.3f}x)")
 
 
-def transform(scan, every: int = 1, mirror: bool = False, crop: tuple[float, float] | None = None):
+def transform(scan, every: int = 1, mirror: bool = False, crop: tuple[float, float] | None = None,
+              rot90: bool = False):
     """Проверка устойчивости без перепрогона детектора: реже кадры (every), зеркало по x, другой кадр по y
-    (crop=(y0, y1): видна только эта полоса, рамки обрезаются и перенормируются)."""
+    (crop=(y0, y1): видна только эта полоса, рамки обрезаются и перенормируются), rot90 — камера повёрнута на 90°
+    (x и y меняются местами: клиент оказывается сбоку от кассира, а не ниже)."""
     import numpy as np
 
     from forte_vision.anchored.types import Det, DenseScan, Frame
@@ -73,6 +76,8 @@ def transform(scan, every: int = 1, mirror: bool = False, crop: tuple[float, flo
         if crop:
             y0, yc = crop
             y1, y2 = (min(max(y1, y0), yc) - y0) / (yc - y0), (min(max(y2, y0), yc) - y0) / (yc - y0)
+        if rot90:
+            x1, y1, x2, y2 = y1, x1, y2, x2
         return (x1, y1, x2, y2)
 
     def keep(b):
@@ -90,7 +95,10 @@ def transform(scan, every: int = 1, mirror: bool = False, crop: tuple[float, flo
     if g is not None and crop:
         h = g.shape[1]
         g = g[:, int(crop[0] * h):int(np.ceil(crop[1] * h))]
-    return DenseScan(scan.duration, scan.width, scan.height, scan.fps / every, frames,
+    if g is not None and rot90:
+        g = g.transpose(0, 2, 1)
+    w, h = (scan.height, scan.width) if rot90 else (scan.width, scan.height)
+    return DenseScan(scan.duration, w, h, scan.fps / every, frames,
                      [scan.gray_t[k] for k in idx], None if g is None else np.ascontiguousarray(g))
 
 
@@ -98,7 +106,29 @@ def _cov(a: tuple[float, float], b: tuple[float, float]) -> float:
     return max(0.0, min(a[1], b[1]) - max(a[0], b[0]))
 
 
+def _desks() -> dict:
+    """Зона стола от модели по каждому ролику — из следов прогона анализатора (FORTE_PEOPLE_ZONES=каталог прогона
+    с eval/ и trace/), как её получает people.py в сервисе. Без неё — стол не известен."""
+    import json
+    run = os.environ.get("FORTE_PEOPLE_ZONES")
+    out = {}
+    if not run:
+        return out
+    for f in Path(run, "eval").glob("X-*.json"):
+        jid = json.loads(f.read_text())["job_id"]
+        tr = Path(run, "trace", f"{jid}.json")
+        if tr.exists():
+            desk = json.loads(tr.read_text())["zones"].get("desk")
+            if desk:
+                out[f.stem] = tuple(desk)
+    return out
+
+
+DESKS: dict = {}
+
+
 def cmd_eval(a):
+    DESKS.update(_desks())
     from forte_vision.anchored.detect import load_scan
     from forte_vision.anchored.people import analyze_people
 
@@ -111,8 +141,13 @@ def cmd_eval(a):
         if not stem.with_suffix(".json").exists():
             print(f"{v}: нет кеша, сначала scan")
             continue
-        scan = transform(load_scan(stem), a.every, a.mirror, a.crop)
-        pp = analyze_people(scan)
+        scan = transform(load_scan(stem), a.every, a.mirror, a.crop, a.rot90)
+        desk = DESKS.get(v)
+        if desk is not None and a.rot90:
+            desk = (desk[1], desk[0], desk[3], desk[2])
+        if desk is not None and a.mirror:
+            desk = (1 - desk[2], desk[1], 1 - desk[0], desk[3])
+        pp = analyze_people(scan, desk=desk)
         dur = scan.duration
         s["n"] += 1
         ev = {k: [e for e in pp.events if e.kind == k] for k in
@@ -247,6 +282,7 @@ def main(argv=None):
     ap.add_argument("-v", "--verbose", action="store_true")
     ap.add_argument("--every", type=int, default=1, help="брать каждый N-й кадр скана (реже кадры)")
     ap.add_argument("--mirror", action="store_true", help="зеркало по горизонтали")
+    ap.add_argument("--rot90", action="store_true", help="камера повёрнута на 90° (x и y меняются местами)")
     ap.add_argument("--crop", type=lambda x: tuple(map(float, x.split(","))), default=None,
                     help="видна только полоса y0,y1 кадра (другой кадр камеры)")
     a = ap.parse_args(argv)

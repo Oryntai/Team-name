@@ -31,6 +31,7 @@ SLOT_IOU, SLOT_FRAC = 0.45, 0.30
 LINK_S, LINK_H = 2.5, 1.2
 UNCERTAIN = 0.85
 SIDE = 0.45
+AXIS_RATIO = 2.0  # горизонтальная ось «кассир — клиент», если по x смещение больше чем вдвое
 MIN_VISITOR_S = 1.5
 VISIT_GAP = 3.0
 PRESENT_GAP = 1.5
@@ -302,14 +303,19 @@ def analyze_people(scan: DenseScan, *, desk: Box | None = None, tau_room: float 
 
     # R5, R6 посетители и их сторона
     others = [tr for i, tr in enumerate(room) if i not in chain and tr.end - tr.start >= MIN_VISITOR_S]
-    ddir, dsrc = _desk_dir(scan, seat, desk, others)
+    axis = _desk_axis(seat, desk, others)
+    ddir, dsrc = _desk_dir(scan, seat, desk, others, axis)
     diag["desk_dir_src"] = dsrc
+    diag["desk_axis"] = "x" if axis == 0 else "y"
     side, sigma = {}, {}
     for tr in others:
         if ddir == 0:
             side[tr.tid] = "unknown"
             continue
-        sigma[tr.tid] = float(np.median([(b[3] - seat[3]) * ddir / h for b in tr.boxes]))
+        if axis == 1:  # камера сверху: глубина — по нижнему краю рамки (ноги, стул)
+            sigma[tr.tid] = float(np.median([(b[3] - seat[3]) * ddir / h for b in tr.boxes]))
+        else:  # камера сбоку: клиент по другую сторону стола — по горизонтали от кассира
+            sigma[tr.tid] = float(np.median([((b[0] + b[2]) - (seat[0] + seat[2])) / 2 * ddir / h for b in tr.boxes]))
         s = sigma[tr.tid]
         side[tr.tid] = "across" if s > SIDE else "behind" if s < -SIDE else "level"
     diag["visitors"] = [(tr.tid, round(tr.start, 1), round(tr.end, 1), side[tr.tid], round(sigma.get(tr.tid, 0), 2))
@@ -402,8 +408,31 @@ def _cashier_events(cashier: Track, seat: Box, doors, t_first: float, t_last: fl
     return ev, present
 
 
-def _desk_dir(scan: DenseScan, seat: Box, desk: Box | None, visitors: list[Track]) -> tuple[int, str]:
-    """+1: стол ниже кассира по кадру. Подсказка desk -> ноутбук у кассира -> прочая техника -> посетитель."""
+def _desk_axis(seat: Box, desk: Box | None, visitors: list[Track]) -> int:
+    """Ось «кассир — клиент»: 1 — вертикаль кадра (камера сверху, как на всех открытых роликах), 0 — горизонталь
+    (камера сбоку: стол и клиент слева или справа от кассира). Горизонталь — только если стол от модели смещён от
+    места кассира по x больше чем вдвое сильнее, чем по y, и самый долгий посетитель с этим не спорит; иначе —
+    прежняя вертикальная логика."""
+    if desk is None:
+        return 1
+    cx, cy = (seat[0] + seat[2]) / 2, (seat[1] + seat[3]) / 2
+    dx, dy = (desk[0] + desk[2]) / 2 - cx, (desk[1] + desk[3]) / 2 - cy
+    if abs(dx) <= AXIS_RATIO * abs(dy):
+        return 1
+    if visitors:
+        tr = max(visitors, key=lambda x: x.end - x.start)
+        vx = float(np.median([(b[0] + b[2]) / 2 for b in tr.boxes])) - cx
+        vy = float(np.median([(b[1] + b[3]) / 2 for b in tr.boxes])) - cy
+        if abs(vx) < abs(vy):
+            return 1
+    return 0
+
+
+def _desk_dir(scan: DenseScan, seat: Box, desk: Box | None, visitors: list[Track], axis: int = 1) -> tuple[int, str]:
+    """Знак стороны стола вдоль оси axis (1: +1 — стол ниже кассира по кадру; 0: +1 — правее).
+    Подсказка desk -> ноутбук у кассира -> прочая техника -> посетитель."""
+    if axis == 0:
+        return _desk_dir_x(scan, seat, desk, visitors)
     if desk is not None:
         return (1 if (desk[1] + desk[3]) / 2 >= seat[3] else -1), "desk"
     h = _h(seat)
@@ -422,6 +451,29 @@ def _desk_dir(scan: DenseScan, seat: Box, desk: Box | None, visitors: list[Track
         y2 = float(np.median([b[3] for b in tr.boxes]))
         if abs(y2 - seat[3]) > SIDE * h:
             return int(np.sign(y2 - seat[3])), "visitor"
+    return 0, "none"
+
+
+def _desk_dir_x(scan: DenseScan, seat: Box, desk: Box | None, visitors: list[Track]) -> tuple[int, str]:
+    """Камера сбоку: стол (и клиент за ним) правее (+1) или левее (-1) кассира."""
+    h = _h(seat)
+    cx, cy = (seat[0] + seat[2]) / 2, (seat[1] + seat[3]) / 2
+    if desk is not None and abs((desk[0] + desk[2]) / 2 - cx) >= 0.1 * h:
+        return int(np.sign((desk[0] + desk[2]) / 2 - cx)), "desk_x"
+    n = len(scan.frames)
+    for names, cmin in ((("laptop",), 0.3), (DESK_OBJ, 0.25)):
+        xs = [(d.box[0] + d.box[2]) / 2 for f in scan.frames for d in f.objects
+              if d.name in names and d.conf >= cmin
+              and np.hypot((d.box[0] + d.box[2]) / 2 - cx, (d.box[1] + d.box[3]) / 2 - cy) <= 2.0 * h]
+        if len(xs) >= 0.2 * n:
+            x = float(np.median(xs))
+            if abs(x - cx) >= 0.1 * h:
+                return int(np.sign(x - cx)), names[0] + "_x"
+    if visitors:
+        tr = max(visitors, key=lambda v: v.end - v.start)
+        x2 = float(np.median([(b[0] + b[2]) / 2 for b in tr.boxes]))
+        if abs(x2 - cx) > SIDE * h:
+            return int(np.sign(x2 - cx)), "visitor_x"
     return 0, "none"
 
 
