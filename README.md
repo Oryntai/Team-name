@@ -13,7 +13,7 @@
   &nbsp;·&nbsp; <a href="docs/sources.md">Источники норм</a>
 </p>
 
-[![Промо-ролик: сервис останавливает запись на секунде нарушения, называет тип и пункт нормы. Нажмите, чтобы открыть полную версию со звуком.](docs/media/forte.gif)](docs/media/forte.mp4)
+<p align="center"><a href="docs/media/forte.mp4"><picture><source srcset="docs/media/forte.webp" type="image/webp"><img src="docs/media/forte.gif" width="900" alt="Промо-ролик: сервис останавливает запись на секунде нарушения, называет тип и пункт нормы. Нажмите, чтобы открыть полную версию со звуком."></picture></a></p>
 
 <p align="center"><sub>Промо, 32 с — <a href="docs/media/forte.mp4">полная версия 1080p со звуком (MP4)</a>. Кадры — ролики открытого набора организаторов.</sub></p>
 
