@@ -171,3 +171,25 @@ def test_public_key_can_be_switched_off(tmp_path):
     unconfigured = Settings(_env_file=None, data_dir=tmp_path / "other", public_api_keys=False)
     with TestClient(create_app(unconfigured)) as client:
         assert client.get("/api/v1/jobs/absent", headers={"X-API-Key": "x"}).status_code == 503
+
+
+def test_other_formats_are_converted_to_mov(api, tmp_path):
+    import shutil
+    import subprocess
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg is not installed")
+    client, _, settings = api
+    for ext in ("mp4", "webm"):
+        src = tmp_path / f"clip.{ext}"
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=10:duration=1",
+                        *(["-c:v", "libvpx"] if ext == "webm" else ["-c:v", "libx264", "-pix_fmt", "yuv420p"]),
+                        str(src)], check=True)
+        r = client.post("/ui-api/analyze", files={"file": (src.name, src.read_bytes())})
+        assert r.status_code == 200, r.text
+        job = r.json()["job_id"]
+        converted = settings.upload_dir / f"{job}.mov"
+        assert converted.exists() and converted.stat().st_size > 0
+        probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=format_name", "-of", "csv=p=0",
+                                str(converted)], capture_output=True, text=True, check=True).stdout
+        assert "mov" in probe
+    assert not list(settings.upload_dir.glob("*.part"))

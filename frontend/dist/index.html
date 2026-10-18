@@ -85,8 +85,8 @@
                   <h3>Перетащите видео сюда</h3>
                   <p>или выберите файл на устройстве</p>
                   <button id="choose-file-button" class="button button-secondary file-picker" type="button" aria-controls="video-file" aria-describedby="file-requirements file-error">Выбрать видео</button>
-                  <input id="video-file" class="visually-hidden" name="file" type="file" accept=".mov,video/quicktime" aria-describedby="file-requirements file-error" tabindex="-1">
-                  <p id="file-requirements" class="file-requirements">MOV, до 50 МБ</p>
+                  <input id="video-file" class="visually-hidden" name="file" type="file" accept=".mov,.mp4,.m4v,.avi,.mkv,.webm,video/quicktime,video/mp4,video/*" aria-describedby="file-requirements file-error" tabindex="-1">
+                  <p id="file-requirements" class="file-requirements">MOV, до 50 МБ · MP4, AVI, MKV, WEBM переведём в MOV сами</p>
                 </div>
                 <div id="selected-file" class="selected-file" aria-live="polite" hidden>
                   <div class="selected-file-copy"><strong id="file-name"></strong><span id="file-size"></span></div>
@@ -227,7 +227,7 @@
               </div>
             </div>
             <dl class="docs-facts" aria-label="Ограничения проверки">
-              <div><dt>Формат видео</dt><dd>MOV</dd></div>
+              <div><dt>Формат видео</dt><dd>MOV (MP4, AVI, MKV, WEBM переводятся в MOV)</dd></div>
               <div><dt>Размер файла</dt><dd>До 50 МБ</dd></div>
               <div><dt>Лимит проверки</dt><dd>5 минут</dd></div>
             </dl>
@@ -271,7 +271,7 @@
                 <section class="docs-section" aria-labelledby="docs-problems">
                   <h2 id="docs-problems" tabindex="-1"><span class="docs-number" aria-hidden="true">04</span>Решение проблем</h2>
                   <div class="docs-faq">
-                    <details><summary>Файл не принимается</summary><p>Проверьте формат MOV, размер до 50 МБ и то, что файл не пустой. Простое переименование расширения не меняет формат видео. Повреждённая запись может пройти загрузку, но завершиться ошибкой при анализе.</p></details>
+                    <details><summary>Файл не принимается</summary><p>Проверьте формат (MOV, MP4, AVI, MKV или WEBM), размер до 50 МБ и то, что файл не пустой. Простое переименование расширения не меняет формат видео. Повреждённая запись может пройти загрузку, но завершиться ошибкой при анализе.</p></details>
                     <details><summary>Пропало соединение</summary><p>Восстановите сеть. Если появилась кнопка «Продолжить проверку», нажмите её: сервис повторит запрос статуса уже загруженного задания. Не перезагружайте страницу, чтобы сохранить возможность продолжить опрос.</p></details>
                     <details><summary>Истекло время или модель недоступна</summary><p>Это незавершённая проверка. Повторите попытку, когда сервис будет доступен; если ошибка повторяется, передайте команде текст ошибки, время запуска и размер файла.</p></details>
                     <details><summary>Видео не воспроизводится в браузере</summary><p>Браузер может не поддерживать кодек внутри MOV. Если анализ завершён, изучите эпизоды по кадрам-доказательствам. У сохранённой записи из истории исходное видео также может отсутствовать.</p></details>

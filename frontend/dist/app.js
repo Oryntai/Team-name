@@ -213,10 +213,10 @@ import { NORMS } from "./norms.js";
     setFileError("");
     if (!file || state.busy) return;
     clearOriginalVideoSource();
-    if (!/\.mov$/i.test(file.name)) {
+    if (!/\.(mov|mp4|m4v|3gp|avi|mkv|webm|wmv|mpe?g|flv|ts)$/i.test(file.name)) {
       state.file = null;
       state.fileName = "";
-      setFileError("Поддерживается видео в формате MOV.");
+      setFileError("Поддерживается MOV, а также MP4, AVI, MKV и WEBM — их сервис сам переведёт в MOV.");
     } else if (file.size <= 0) {
       state.file = null;
       state.fileName = "";
@@ -268,7 +268,7 @@ import { NORMS } from "./norms.js";
     if (status === 400) return "Сервис не принял файл. Убедитесь, что это непустая видеозапись.";
     if (status === 408) return "Время загрузки истекло. Проверьте соединение и выберите файл ещё раз.";
     if (status === 413) return "Файл больше 50 МБ. Выберите запись меньшего размера.";
-    if (status === 415) return "Сервис принимает видеозаписи только в формате MOV.";
+    if (status === 415) return "Файл не удалось принять: нужен MOV или MP4, AVI, MKV, WEBM (их сервис переводит в MOV).";
     if (status === 503) return "Очередь проверок занята. Попробуйте отправить запись немного позже.";
     return "Сервис временно недоступен. Попробуйте ещё раз позднее.";
   }
