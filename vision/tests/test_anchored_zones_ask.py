@@ -465,3 +465,102 @@ def test_drinkware_is_a_drink_even_if_the_model_says_food():
     assert norm_choices({"what": "two cans", "group": "food"}, OBJ_CHOICES) == "drink"
     assert norm_choices({"what": "a sandwich and a cup", "group": "food"}, OBJ_CHOICES) == "food"
     assert norm_choices({"what": "an apple", "group": "food"}, OBJ_CHOICES) == "food"
+
+
+# ---------- запасная локальная модель ----------
+
+class Clock:
+    def __init__(self):
+        self.t = 1000.0
+
+    def __call__(self):
+        return self.t
+
+
+def test_fallback_answers_when_primary_down_and_cooldown_skips_primary(synthetic_video):
+    import urllib.error
+
+    from forte_vision.anchored.ask import MLXChat
+
+    primary_calls = []
+
+    def down(body):
+        primary_calls.append(body)
+        raise urllib.error.URLError(ConnectionRefusedError(61, "Connection refused"))
+
+    fb = FakeServer(lambda b: json.dumps({k: "yes" for k in _keys_in(b)}))
+    clock = Clock()
+    a = CropAsker(url="http://127.0.0.1:9", transport=down, fallback=fb, retry_sec=30, clock=clock)
+    out = a.ask(synthetic_video, _items(2))
+    assert [o.answer for o in out] == ["yes", "yes"] and not any(o.raw.startswith("error:") for o in out)
+    assert len(primary_calls) == 1 and len(fb.bodies) == 1
+    assert a.stats.fallback_calls == 1 and a.stats.primary_failures == 1 and a.stats.errors == 0
+    assert "URLError" in a.stats.fallback_reason
+    # запасная модель получает тот же запрос, что ушёл бы основному: картинки и тексты в том же порядке
+    prompt, imgs = MLXChat.split_content(fb.bodies[0]["messages"][0]["content"])
+    assert len(imgs) == 2 and imgs[0][:2] == b"\xff\xd8"
+    assert "key=k0" in prompt and prompt.index("key=k0") < prompt.index("key=k1")
+
+    # пока идёт пауза — основной не трогаем, и grounding тоже отвечает запасная модель
+    fb.reply = lambda b: '[{"bbox_2d": [250, 500, 750, 1000], "label": "safe"}]'
+    clock.t += 10
+    assert a.ground(synthetic_video, 5.0, {"safe": "a safe"}) == {"safe": (0.25, 0.5, 0.75, 1.0)}
+    assert len(primary_calls) == 1 and a.stats.fallback_calls == 2
+
+    # пауза кончилась — основной пробуем снова; он поднялся — запасная больше не нужна
+    clock.t += 30
+    up = FakeServer(lambda b: '[{"bbox_2d": [0, 0, 500, 500], "label": "safe"}]')
+    a._transport = up
+    assert a.ground(synthetic_video, 6.0, {"safe": "a safe"}) == {"safe": (0.0, 0.0, 0.5, 0.5)}
+    assert a.stats.fallback_calls == 2 and len(up.bodies) == 1
+
+
+@pytest.mark.parametrize("exc, falls_back", [
+    (TimeoutError("timed out"), True),
+    ("http500", True),
+    ("broken", True),
+    ("http400", False),
+])
+def test_fallback_only_on_transport_failure(synthetic_video, exc, falls_back):
+    import io as _io
+    import urllib.error
+
+    def primary(body):
+        if exc == "broken":
+            return {"oops": 1}
+        if isinstance(exc, str):
+            raise urllib.error.HTTPError("http://127.0.0.1:9", int(exc[4:]), "x", {}, _io.BytesIO(b""))
+        raise exc
+
+    fb = FakeServer(lambda b: json.dumps({k: "no" for k in _keys_in(b)}))
+    a = CropAsker(url="http://127.0.0.1:9", transport=primary, fallback=fb)
+    out = a.ask(synthetic_video, _items(1))
+    assert (out[0].answer == "no") is falls_back and a.stats.fallback_calls == int(falls_back)
+    assert a.stats.errors == int(not falls_back)
+
+
+def test_no_fallback_configured_behaves_as_before(synthetic_video):
+    import urllib.error
+
+    def down(body):
+        raise urllib.error.URLError("refused")
+
+    a = CropAsker(url="http://127.0.0.1:9", transport=down)
+    out = a.ask(synthetic_video, _items(1))
+    assert out[0].answer == "unclear" and out[0].raw.startswith("error:") and a.stats.fallback_calls == 0
+
+
+def test_create_analyzer_fallback_is_lazy(monkeypatch):
+    from forte_vision.anchored import analyzer as an
+    from forte_vision.anchored.ask import MLXChat
+
+    monkeypatch.setattr("forte_vision.anchored.detect.make_detector", lambda name: object())
+    monkeypatch.setenv("FORTE_VLM_URL", "http://127.0.0.1:9")
+    monkeypatch.delenv("FORTE_VLM_KEY_FILE", raising=False)
+    monkeypatch.delenv("FORTE_VLM_FALLBACK_MODEL", raising=False)
+    assert an.create_analyzer().asker._fallback is None
+    monkeypatch.setenv("FORTE_VLM_FALLBACK_MODEL", "mlx-community/does-not-exist")
+    monkeypatch.setenv("FORTE_VLM_RETRY_SEC", "7")
+    asker = an.create_analyzer().asker
+    assert isinstance(asker._fallback, MLXChat) and asker.retry_sec == 7.0
+    assert "mlx-community/does-not-exist" not in MLXChat._loaded  # веса не грузим на старте
