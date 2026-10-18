@@ -190,11 +190,18 @@ _EQUIPMENT = {"machine", "counter", "register", "detector", "device", "laptop", 
               "mouse", "printer", "scanner", "terminal", "tablet", "calculator", "lamp", "chair", "armrest", "cable"}
 
 
+_DRINKWARE = {"can", "cans", "cup", "cups", "mug", "mugs", "bottle", "bottles", "glass", "glasses", "thermos"}
+
+
 def norm_choices(v, choices: Sequence[str]) -> str:
     """Ответ на вопрос «что из этого видно» -> "cash+food" | "none" | "unclear" (подмножество choices)."""
     if isinstance(v, dict):
-        if "other" in choices and _EQUIPMENT & set(re.findall(r"[a-z]+", str(v.get("what") or "").lower())):
+        what = set(re.findall(r"[a-z]+", str(v.get("what") or "").lower()))
+        if "other" in choices and _EQUIPMENT & what:
             return "other"
+        # «two cans», «a cup»: тара для питья — напиток, даже если модель поставила группу food (чистый X-25)
+        if "drink" in choices and _DRINKWARE & what and not set(_CHOICE_SYN["food"]) & what:
+            return "drink"
         g = next((v[k] for k in ("group", "class", "category", "answer", "value", "items", "objects") if k in v), None)
         if g is None or norm_choices(g, choices) == "unclear":  # группа не распознана — по словам «what»
             g = v.get("what", g)

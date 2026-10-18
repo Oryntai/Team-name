@@ -457,3 +457,11 @@ def test_equipment_named_cash_something_is_not_cash():
     assert norm_choices({"what": "black cash register", "group": "cash"}, OBJ_CHOICES) == "other"
     assert norm_choices({"what": "a crumpled banknote", "group": "cash"}, OBJ_CHOICES) == "cash"
     assert norm_choices({"what": "two cans", "group": "drink"}, OBJ_CHOICES) == "drink"
+
+
+def test_drinkware_is_a_drink_even_if_the_model_says_food():
+    from forte_vision.anchored.ask import norm_choices
+    from forte_vision.anchored.decide import OBJ_CHOICES
+    assert norm_choices({"what": "two cans", "group": "food"}, OBJ_CHOICES) == "drink"
+    assert norm_choices({"what": "a sandwich and a cup", "group": "food"}, OBJ_CHOICES) == "food"
+    assert norm_choices({"what": "an apple", "group": "food"}, OBJ_CHOICES) == "food"
