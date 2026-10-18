@@ -17,6 +17,31 @@ import numpy as np
 
 from .types import Det, DenseScan, Frame
 
+
+def upright_k(frame) -> int:
+    """Сколько раз повернуть кадр на 90° против часовой, чтобы он стоял так, как его покажет проигрыватель:
+    телефон пишет видео боком и ставит тег поворота. Кадры-доказательства (VideoIO, ffmpeg) поворачиваются так
+    же, поэтому вырезки и таймкоды анализатора совпадают с ними."""
+    return int(round(float(getattr(frame, "rotation", 0) or 0) / 90.0)) % 4
+
+
+def upright_image(frame, k: int):
+    from PIL import Image
+
+    im = frame.to_image()
+    return im if not k else im.transpose({1: Image.Transpose.ROTATE_90, 2: Image.Transpose.ROTATE_180,
+                                          3: Image.Transpose.ROTATE_270}[k])
+
+
+def _upright_array(frame, width: int, height: int, fmt: str, k: int) -> np.ndarray:
+    """Кадр в формате fmt размером width×height уже ПОСЛЕ поворота (для k нечётного ширина и высота хранения
+    меняются местами)."""
+    if k % 2:
+        arr = frame.reformat(width=height, height=width, format=fmt).to_ndarray()
+    else:
+        arr = frame.reformat(width=width, height=height, format=fmt).to_ndarray()
+    return np.ascontiguousarray(np.rot90(arr, k)) if k else arr.copy()
+
 # классы COCO, которые держим: люди + предметы рабочего места (tv — это счётная машинка/принтер/сейф)
 KEEP = {"person", "laptop", "tv", "chair", "dining table", "keyboard", "handbag", "backpack", "suitcase",
         "cup", "bottle", "cell phone", "book", "mouse", "remote"}
@@ -100,6 +125,7 @@ def dense_scan(path: str, fps: float = 5.0, *, detector, deadline: float | None 
         W, H = s.codec_context.width, s.codec_context.height
         gw = max(8, int(gray_width))
         gh = max(8, round(gw * H / W))
+        rot = None  # поворот по тегу видео; размеры ниже — для стоящего кадра
         rate = float(s.average_rate) if s.average_rate else 30.0
         meta_dur = float(s.duration * s.time_base) if s.duration else (c.duration / 1e6 if c.duration else None)
 
@@ -137,17 +163,22 @@ def dense_scan(path: str, fps: float = 5.0, *, detector, deadline: float | None 
                 continue
             t = float(f.pts * s.time_base)
             last_pts = max(last_pts, t)
+            if rot is None:
+                rot = upright_k(f)
+                if rot % 2:
+                    W, H = H, W
+                    gh = max(8, round(gw * H / W))
             if t + 1e-6 < nxt:
                 continue
             while nxt <= t + 1e-6:
                 nxt += 1.0 / cur_fps
-            grays.append(f.reformat(width=gw, height=gh, format="gray").to_ndarray().copy())
+            grays.append(_upright_array(f, gw, gh, "gray", rot))
             if hi_width and t + 1e-6 >= nxt_hi:
                 hh = max(8, round(hi_width * H / W))
-                his.append(f.reformat(width=hi_width, height=hh, format="rgb24").to_ndarray().copy())
+                his.append(_upright_array(f, hi_width, hh, "rgb24", rot))
                 hi_t.append(t)
                 nxt_hi = t + 1.0 / max(hi_fps, 0.1) - 1e-3
-            pend.append((t, f.to_image()))
+            pend.append((t, upright_image(f, rot)))
             if len(pend) >= batch_n:
                 flush()
         flush()

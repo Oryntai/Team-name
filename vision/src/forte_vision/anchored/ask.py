@@ -25,6 +25,7 @@ from pathlib import Path
 
 from PIL import Image
 
+from .detect import upright_image, upright_k
 from .types import Box, CropAnswer, CropItem
 
 PROMPT_VERSION = "ask-v2"  # v2: каждый вопрос в пакете звучит один раз (Q1, Q2…), картинки ссылаются на него
@@ -89,7 +90,7 @@ def grab_frames(path: str, times: Sequence[float]) -> list[tuple[float, Image.Im
                 last = (t, f)
                 while k < len(order) and t + 1e-6 >= times[order[k]]:
                     if t not in imgs:
-                        imgs[t] = f.to_image()
+                        imgs[t] = upright_image(f, upright_k(f))
                     out[order[k]] = (t, imgs[t])
                     k += 1
                 if k == len(order):
@@ -97,7 +98,7 @@ def grab_frames(path: str, times: Sequence[float]) -> list[tuple[float, Image.Im
             if use_seek and first is not None and first > t_min + 1e-6:
                 continue  # seek проскочил нужное время — читаем с начала
             if k < len(order) and last is not None:
-                im = last[1].to_image()
+                im = upright_image(last[1], upright_k(last[1]))
                 for i in order[k:]:
                     out[i] = (last[0], im)
             break

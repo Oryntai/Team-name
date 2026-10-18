@@ -419,14 +419,27 @@ def door_state_fn(scan, zones: Zones, people: People, thr: float = 0.25):
     import numpy as np
 
     box = zones.boxes.get("door") or zones.diag.get("door_wall")
+    wall = zones.diag.get("door_wall")
     G = None if scan is None else scan.gray
     if box is None or G is None or len(G) == 0:
         return None
     G = np.asarray(G, np.float32)
     T = np.asarray(scan.gray_t if len(scan.gray_t) == len(G) else [f.t for f in scan.frames], float)
     _, gh, gw = G.shape
-    x1, y1 = int(box[0] * gw), int(box[1] * gh)
-    x2, y2 = max(x1 + 1, int(np.ceil(box[2] * gw))), max(y1 + 1, int(np.ceil(box[3] * gh)))
+
+    def px(b):
+        x1, y1 = int(b[0] * gw), int(b[1] * gh)
+        return x1, y1, max(x1 + 1, int(np.ceil(b[2] * gw))), max(y1 + 1, int(np.ceil(b[3] * gh)))
+
+    # где смотреть: створка от модели и, если модель нашла и всю стеклянную стену, — вертикальные полосы стены
+    # в четверть её ширины с шагом в восьмую. Рамка створки от одного ответа модели плавает (HEVC-копия того же
+    # ролика дала створку вдвое шире и сдвинутую на стекло — открытая дверь «потерялась»); полоса, где дверь,
+    # находится и без точной створки.
+    regions = [px(box)]
+    if wall is not None:
+        wx1, wy1, wx2, wy2 = px(wall)
+        sw = max(2, (wx2 - wx1) // 4)
+        regions += [(x, wy1, min(wx2, x + sw), wy2) for x in range(wx1, max(wx1 + 1, wx2 - sw + 1), max(1, sw // 2))]
     seen = [float(e.meta.get("t_seen", e.t)) for e in people.events if e.kind == "cashier_enters"]
     ref_end = max(0.6, (min(seen) - 0.5) if seen else 0.6)
     ref_idx = np.where(T <= ref_end)[0]
@@ -444,17 +457,24 @@ def door_state_fn(scan, zones: Zones, people: People, thr: float = 0.25):
               max(0, int((b[0] - 0.15 * w) * gw)):int(np.ceil((b[2] + 0.15 * w) * gw))] = True
         return m
 
+    def region_ratio(k: int, r) -> float | None:
+        x1, y1, x2, y2 = r
+        d = np.abs(G[k] - ref)
+        d -= np.median(d)  # смена освещения всего кадра
+        keep = ~person_mask(k)[y1:y2, x1:x2]
+        if keep.mean() < 0.3:
+            return None
+        return float((d[y1:y2, x1:x2][keep] > 25).mean())
+
     def state(t: float):
         idx = np.where(np.abs(T - t) <= 0.6)[0]
-        vals = []
-        for k in idx:
-            d = np.abs(G[k] - ref)
-            d -= np.median(d)  # смена освещения всего кадра
-            keep = ~person_mask(k)[y1:y2, x1:x2]
-            if keep.mean() < 0.3:
-                continue
-            vals.append(float((d[y1:y2, x1:x2][keep] > 25).mean()))
-        return None if not vals else float(np.median(vals)) >= thr
+        best = None
+        for r in regions:
+            vals = [v for v in (region_ratio(k, r) for k in idx) if v is not None]
+            if vals:
+                m = float(np.median(vals))
+                best = m if best is None else max(best, m)
+        return None if best is None else best >= thr
 
     state.ratio_debug = True
     return state
