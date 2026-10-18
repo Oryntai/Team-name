@@ -723,7 +723,8 @@ import { NORMS } from "./norms.js";
   function renderResult() {
     const result = state.result;
     const hasEvents = result.verdict === "violation";
-    elements.resultTitle.textContent = hasEvents ? "Разбор эпизодов" : "Проверка завершена";
+    // формулировки исходов — дословно из раздела 4 ТЗ
+    elements.resultTitle.textContent = hasEvents ? "Обнаружены признаки возможных нарушений" : "Нарушение не обнаружено";
     elements.resultSummary.textContent = hasEvents
       ? `Найдено эпизодов: ${result.violations.length}. Выберите эпизод в боковой панели, чтобы просмотреть доказательства.`
       : "";
