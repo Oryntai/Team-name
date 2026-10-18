@@ -497,9 +497,11 @@ def test_fallback_answers_when_primary_down_and_cooldown_skips_primary(synthetic
     assert a.stats.fallback_calls == 1 and a.stats.primary_failures == 1 and a.stats.errors == 0
     assert "URLError" in a.stats.fallback_reason
     # запасная модель получает тот же запрос, что ушёл бы основному: картинки и тексты в том же порядке
-    prompt, imgs = MLXChat.split_content(fb.bodies[0]["messages"][0]["content"])
+    parts, imgs = MLXChat.split_content(fb.bodies[0]["messages"][0]["content"])
     assert len(imgs) == 2 and imgs[0][:2] == b"\xff\xd8"
-    assert "key=k0" in prompt and prompt.index("key=k0") < prompt.index("key=k1")
+    seq = [p.get("text", "<img>") for p in parts]
+    i0, i1 = (next(i for i, x in enumerate(seq) if f"key={k}" in x) for k in ("k0", "k1"))
+    assert seq[i0 + 1] == "<img>" and seq[i1 + 1] == "<img>" and i0 < i1  # вырезка сразу за своей подписью
 
     # пока идёт пауза — основной не трогаем, и grounding тоже отвечает запасная модель
     fb.reply = lambda b: '[{"bbox_2d": [250, 500, 750, 1000], "label": "safe"}]'

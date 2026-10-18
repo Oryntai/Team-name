@@ -103,20 +103,22 @@ class MLXChat:
             return MLXChat._loaded[self.model_id]
 
     @staticmethod
-    def split_content(content: list) -> tuple[str, list[bytes]]:
-        """Текстовые части — в один запрос по порядку, картинки — байтами JPEG по порядку."""
-        texts, images = [], []
+    def split_content(content: list) -> tuple[list[dict], list[bytes]]:
+        """Части запроса в том же порядке: текст как есть, на месте картинки — {"type": "image"};
+        картинки — байтами JPEG по порядку. Так модель видит каждую вырезку рядом с её подписью, как на сервере."""
+        parts, images = [], []
         for part in content:
             if part.get("type") == "text":
-                texts.append(str(part.get("text", "")))
+                parts.append({"type": "text", "text": str(part.get("text", ""))})
             elif part.get("type") == "image_url":
                 url = (part.get("image_url") or {}).get("url", "")
                 images.append(base64.b64decode(url.split(",", 1)[1]))
-        return "\n".join(texts), images
+                parts.append({"type": "image"})
+        return parts, images
 
     def __call__(self, body: dict) -> dict:
         content = body["messages"][0]["content"]
-        prompt, images = self.split_content(content if isinstance(content, list) else [{"type": "text", "text": content}])
+        parts, images = self.split_content(content if isinstance(content, list) else [{"type": "text", "text": content}])
         model, processor, generate, template = self._model()
         with MLXChat._lock, tempfile.TemporaryDirectory(prefix="fv_mlx_") as d:  # MLX — по одному запросу
             paths = []
@@ -124,7 +126,12 @@ class MLXChat:
                 p = os.path.join(d, f"{i:04d}.jpg")
                 Image.open(io.BytesIO(b)).convert("RGB").save(p, quality=95)
                 paths.append(p)
-            text = template(processor, model.config, prompt, num_images=len(paths))
+            try:  # шаблон самой модели: картинки на своих местах между текстами
+                text = processor.apply_chat_template([{"role": "user", "content": parts}],
+                                                     add_generation_prompt=True, tokenize=False)
+            except Exception:  # noqa: BLE001 — нет шаблона у процессора: тексты подряд, картинки впереди
+                prompt = "".join(x["text"] for x in parts if x["type"] == "text")
+                text = template(processor, model.config, prompt, num_images=len(paths))
             r = generate(model, processor, text, image=paths or None, max_tokens=int(body.get("max_tokens", 128)),
                          temperature=0.0, verbose=False)
         return {"choices": [{"message": {"role": "assistant", "content": r.text}}],
