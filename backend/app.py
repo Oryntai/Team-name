@@ -2,6 +2,7 @@
 
 import asyncio
 import hmac
+import re
 import secrets
 import shutil
 import time
@@ -98,6 +99,20 @@ class RequestEnvelope:
         await self.app(scope, limited_receive, send)
 
 
+class CollapseSlashes:
+    """`https://host/` + `/api/v1/analyze` даёт `//api/v1/analyze`: клиент жюри, склеивший базовый адрес со слэшем,
+    получил бы 404. Повторные слэши в пути схлопываются до маршрутизации."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") in ("http", "websocket") and "//" in scope.get("path", ""):
+            path = re.sub(r"/{2,}", "/", scope["path"])
+            scope = {**scope, "path": path, "raw_path": path.encode()}
+        await self.app(scope, receive, send)
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     config = settings or Settings()
     store = Store(config.db_path, max_attempts=config.max_attempts)
@@ -114,6 +129,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.store = store
     keys = KeyCheck(config, store)
     application.add_middleware(RequestEnvelope, settings=config, keys=keys)
+    application.add_middleware(CollapseSlashes)
     key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
     async def jury_key(key: Annotated[str | None, Depends(key_header)]):

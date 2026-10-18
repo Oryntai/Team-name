@@ -193,3 +193,12 @@ def test_other_formats_are_converted_to_mov(api, tmp_path):
                                 str(converted)], capture_output=True, text=True, check=True).stdout
         assert "mov" in probe
     assert not list(settings.upload_dir.glob("*.part"))
+
+
+def test_double_slash_after_base_url_still_reaches_the_api(api):
+    client, _, _ = api
+    r = client.post("http://testserver//api/v1/analyze", headers={"X-API-Key": "test-only-key"}, files={"file": ("a.mov", b"123")})
+    assert r.status_code == 200, r.text
+    job = r.json()["job_id"]
+    assert client.get(f"http://testserver//api/v1/jobs/{job}", headers={"X-API-Key": "test-only-key"}).json()["status"] == "processing"
+    assert client.get("http://testserver//api/v1/jobs/nope").status_code == 401  # ключ по-прежнему обязателен
