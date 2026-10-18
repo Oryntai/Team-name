@@ -354,7 +354,8 @@ def _seen(p: Probe, yes: list[CropItem], answers: dict[str, CropAnswer]) -> str:
         return f"{p.reason}; {_FIXED_RU.get(p.check, 'по детектору')}"
     if not yes:
         return p.reason
-    times = " и ".join(f"{it.t:.1f}" for it in sorted(yes, key=lambda it: it.t)[:3])
+    ts = [f"{it.t:.1f}" for it in sorted(yes, key=lambda it: it.t)[:3]]
+    times = ts[0] if len(ts) == 1 else ", ".join(ts[:-1]) + " и " + ts[-1]
     what = _YES_RU.get(p.check)
     if what is None:
         got = set()
